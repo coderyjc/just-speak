@@ -7,9 +7,57 @@ APP_STYLESHEET = r"""
     color: #222a31;
 }
 
-QMainWindow, QWidget#appRoot, QStackedWidget#pageStack {
+QMainWindow {
+    background: #171b20;
+}
+
+QWidget#appRoot {
+    background: #f2f0ea;
+    border: 1px solid #343b42;
+}
+
+QWidget#appContent, QStackedWidget#pageStack {
     background: #f2f0ea;
 }
+
+QFrame#titleBar {
+    background: #171b20;
+    border: 0;
+    border-bottom: 1px solid #272e35;
+}
+QLabel#titleBarIcon {
+    background: #ff6542;
+    border-radius: 4px;
+}
+QLabel#titleBarTitle {
+    color: #dfe3e6;
+    font-family: "Bahnschrift SemiBold", "Microsoft YaHei UI";
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+}
+QPushButton#titleBarButton, QPushButton#titleBarClose {
+    min-width: 42px;
+    max-width: 42px;
+    min-height: 35px;
+    max-height: 35px;
+    color: #aeb6bd;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    padding: 0;
+    font-family: "Segoe UI Symbol";
+    font-size: 14px;
+    font-weight: 400;
+}
+QPushButton#titleBarButton:hover {
+    color: #fffdf8;
+    background: #2b3239;
+}
+QPushButton#titleBarButton:pressed { background: #343d45; padding: 0; }
+QPushButton#titleBarClose:hover { color: #ffffff; background: #d94b3b; }
+QPushButton#titleBarClose:pressed { background: #b63c30; padding: 0; }
+QSizeGrip#windowSizeGrip { background: transparent; }
 
 QScrollArea#settingsScroll, QScrollArea#settingsScroll > QWidget > QWidget,
 QWidget#settingsScrollContent {
@@ -265,6 +313,11 @@ QPushButton#compactDangerButton {
     color: #a93c30;
     background: #fff7f4;
     border-color: #ebbbb0;
+}
+QPushButton#compactButton[feedback="success"] {
+    color: #176b59;
+    background: #dff2eb;
+    border-color: #a9d7c7;
 }
 
 QPushButton#pipelineStep {

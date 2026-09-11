@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QWheelEvent
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -190,7 +190,14 @@ class RealtimePage(Page):
         control_row.setContentsMargins(10, 8, 10, 8)
         control_row.setSpacing(7)
         self.orb = RecordingDot()
-        control_row.addWidget(self.orb)
+        indicator_slot = QWidget()
+        indicator_slot.setObjectName("recordingIndicatorSlot")
+        indicator_slot.setFixedSize(18, 18)
+        indicator_layout = QHBoxLayout(indicator_slot)
+        indicator_layout.setContentsMargins(0, 0, 0, 0)
+        indicator_layout.setSpacing(0)
+        indicator_layout.addWidget(self.orb)
+        control_row.addWidget(indicator_slot)
         self.duration = _label("00:00.0", "recordingDuration")
         control_row.addWidget(self.duration)
         self.level = AnimatedProgressBar()
@@ -628,7 +635,12 @@ class HistoryPage(Page):
         editable: bool,
         visible: bool = True,
     ) -> None:
+        # Loading another session must never treat the previous editor contents as
+        # an in-session stage edit. The latter is only valid while navigating the
+        # pipeline of the same history record.
+        self.text.setReadOnly(True)
         self._session_id = session_id
+        self._selected_stage = "asr"
         self.detail_title.setText(title or "未命名文稿")
         self.detail_title.setToolTip(title)
         self._stage_texts = {}
@@ -651,13 +663,17 @@ class HistoryPage(Page):
         for stage, _ in PIPELINE_STAGES:
             state = states.get(stage, "pending")
             self.pipeline.set_stage(stage, state, bool(self._stage_texts.get(stage)))
-        self._select_stage(self._final_stage)
+        self._select_stage(self._final_stage, preserve_current=False)
         self.delete.setEnabled(bool(session_id))
 
-    def _select_stage(self, stage: str) -> None:
+    def _select_stage(self, stage: str, preserve_current: bool = True) -> None:
         if stage not in self._stage_texts:
             return
-        if self._selected_stage == self._final_stage and not self.text.isReadOnly():
+        if (
+            preserve_current
+            and self._selected_stage == self._final_stage
+            and not self.text.isReadOnly()
+        ):
             self._stage_texts[self._selected_stage] = self.text.toPlainText()
         self._selected_stage = stage
         self.pipeline.select(stage)
@@ -697,6 +713,12 @@ class SettingsPage(Page):
         scenarios: list[dict[str, object]] | None = None,
     ) -> None:
         super().__init__()
+        self._auto_save_suspended = True
+        self._microphone = config.microphone
+        self._auto_save_timer = QTimer(self)
+        self._auto_save_timer.setSingleShot(True)
+        self._auto_save_timer.setInterval(750)
+        self._auto_save_timer.timeout.connect(self._emit_auto_save)
         self.scroll = QScrollArea()
         self.scroll.setObjectName("settingsScroll")
         self.scroll.setWidgetResizable(True)
@@ -876,21 +898,11 @@ class SettingsPage(Page):
         local_layout.addStretch(1)
         columns.addWidget(local)
         content_layout.addLayout(columns)
-        actions = QHBoxLayout()
-        actions.addWidget(_label("配置修改对下一项任务生效", "cardCaption"))
-        actions.addStretch(1)
-        self.save = QPushButton("保存设置")
-        self.save.setObjectName("primaryButton")
-        actions.addWidget(self.save)
-        content_layout.addLayout(actions)
         content_layout.addStretch(1)
         self.scroll.setWidget(content)
         self.layout.addWidget(self.scroll, 1)
         data_button.clicked.connect(self._choose_data_dir)
         ffmpeg_button.clicked.connect(self._choose_ffmpeg)
-        self.save.clicked.connect(
-            lambda: self.save_requested.emit(self.values(), self.api_key.text())
-        )
         self.test.clicked.connect(
             lambda: self.test_requested.emit(self.values(), self.api_key.text())
         )
@@ -903,6 +915,23 @@ class SettingsPage(Page):
         )
         self._limit_transcription_prompt()
         self.set_scenarios(scenarios or [])
+        for signal in (
+            self.api_key.textChanged,
+            self.remember.toggled,
+            self.region.currentIndexChanged,
+            self.language.currentIndexChanged,
+            self.model.textChanged,
+            self.llm_model.textChanged,
+            self.workspace.textChanged,
+            self.endpoint.textChanged,
+            self.transcription_prompt.textChanged,
+            self.polish_prompt.textChanged,
+            self.ffmpeg.textChanged,
+            self.chunk.valueChanged,
+        ):
+            signal.connect(self._queue_auto_save)
+        self.data_dir.editingFinished.connect(self._queue_auto_save)
+        self._auto_save_suspended = False
 
     def values(self) -> AppConfig:
         return AppConfig(
@@ -919,6 +948,7 @@ class SettingsPage(Page):
             ],
             polish_prompt=self.polish_prompt.toPlainText().strip() or DEFAULT_POLISH_PROMPT,
             language=str(self.language.currentData()),
+            microphone=self._microphone,
             data_dir=self.data_dir.text().strip(),
             ffmpeg_path=self.ffmpeg.text().strip(),
             chunk_seconds=self.chunk.value() * 60,
@@ -926,17 +956,41 @@ class SettingsPage(Page):
         )
 
     def apply_config(self, config: AppConfig) -> None:
-        self.region.setCurrentIndex(max(0, self.region.findData(config.region)))
-        self.workspace.setText(config.workspace_id)
-        self.model.setText(config.model)
-        self.endpoint.setText(config.base_url or config.websocket_url)
-        self.llm_model.setText(config.llm_model)
-        self.transcription_prompt.setPlainText(
-            config.transcription_prompt[:MAX_TRANSCRIPTION_PROMPT_LENGTH]
-        )
-        self.polish_prompt.setPlainText(config.polish_prompt or DEFAULT_POLISH_PROMPT)
-        self.language.setCurrentIndex(max(0, self.language.findData(config.language)))
-        self.chunk.setValue(max(1, min(10, round(config.chunk_seconds / 60))))
+        self._auto_save_timer.stop()
+        self._auto_save_suspended = True
+        try:
+            self._microphone = config.microphone
+            self.region.setCurrentIndex(max(0, self.region.findData(config.region)))
+            self.workspace.setText(config.workspace_id)
+            self.model.setText(config.model)
+            self.endpoint.setText(config.base_url or config.websocket_url)
+            self.llm_model.setText(config.llm_model)
+            self.transcription_prompt.setPlainText(
+                config.transcription_prompt[:MAX_TRANSCRIPTION_PROMPT_LENGTH]
+            )
+            self.polish_prompt.setPlainText(
+                config.polish_prompt or DEFAULT_POLISH_PROMPT
+            )
+            self.language.setCurrentIndex(
+                max(0, self.language.findData(config.language))
+            )
+            self.chunk.setValue(
+                max(1, min(10, round(config.chunk_seconds / 60)))
+            )
+        finally:
+            self._auto_save_suspended = False
+
+    def _queue_auto_save(self, *_args: object) -> None:
+        if self._auto_save_suspended:
+            return
+        self.set_page_status("修改待保存…", "warning")
+        self._auto_save_timer.start()
+
+    def _emit_auto_save(self) -> None:
+        if self._auto_save_suspended:
+            return
+        self.set_page_status("正在自动保存…", "live")
+        self.save_requested.emit(self.values(), self.api_key.text())
 
     def _limit_transcription_prompt(self) -> None:
         text = self.transcription_prompt.toPlainText()
@@ -993,6 +1047,7 @@ class SettingsPage(Page):
         path = QFileDialog.getExistingDirectory(self, "选择数据目录", self.data_dir.text())
         if path:
             self.data_dir.setText(path)
+            self._queue_auto_save()
 
     def _choose_ffmpeg(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

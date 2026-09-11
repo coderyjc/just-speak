@@ -11,13 +11,16 @@ from PySide6.QtCore import (
     Qt,
     QTimer,
 )
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
     QGraphicsOpacityEffect,
+    QHBoxLayout,
     QLabel,
     QProgressBar,
+    QPushButton,
+    QSizeGrip,
     QWidget,
 )
 
@@ -36,6 +39,156 @@ class Card(QFrame):
         self.setObjectName(object_name)
         if shadow:
             add_shadow(self)
+
+
+class WindowControlButton(QPushButton):
+    """Font-independent title-bar control icon."""
+
+    def __init__(self, kind: str, tooltip: str, name: str) -> None:
+        super().__init__()
+        self._kind = kind
+        self.setObjectName(name)
+        self.setFixedSize(42, 35)
+        self.setToolTip(tooltip)
+        self.setAccessibleName(tooltip)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+    def set_restore_mode(self, restore: bool) -> None:
+        self._kind = "restore" if restore else "maximize"
+        self.update()
+
+    def paintEvent(self, event: object) -> None:  # noqa: N802 - Qt API
+        super().paintEvent(event)  # type: ignore[arg-type]
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        color = QColor("#fffdf8" if self.underMouse() else "#aeb6bd")
+        painter.setPen(QPen(color, 1.15))
+        if self._kind == "minimize":
+            painter.drawLine(16, 19, 26, 19)
+        elif self._kind == "maximize":
+            painter.drawRect(QRectF(16.5, 12.5, 9, 9))
+        elif self._kind == "restore":
+            painter.drawRect(QRectF(15.5, 14.5, 8, 8))
+            painter.drawLine(18, 12, 26, 12)
+            painter.drawLine(26, 12, 26, 20)
+            painter.drawLine(24, 20, 26, 20)
+        else:
+            painter.drawLine(17, 13, 25, 21)
+            painter.drawLine(25, 13, 17, 21)
+
+
+class WindowTitleBar(QFrame):
+    """Theme-aware replacement for the native Windows title bar."""
+
+    def __init__(self, window: QWidget) -> None:
+        super().__init__(window)
+        self._window = window
+        self._drag_offset = None
+        self.setObjectName("titleBar")
+        self.setFixedHeight(36)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(11, 0, 0, 0)
+        layout.setSpacing(8)
+        icon = QLabel()
+        icon.setObjectName("titleBarIcon")
+        icon.setFixedSize(16, 16)
+        pixmap = window.windowIcon().pixmap(16, 16)
+        if not pixmap.isNull():
+            icon.setPixmap(pixmap)
+        layout.addWidget(icon)
+        title = QLabel("JustSpeak")
+        title.setObjectName("titleBarTitle")
+        layout.addWidget(title)
+        layout.addStretch(1)
+
+        self.minimize = self._button("minimize", "最小化")
+        self.maximize = self._button("maximize", "最大化")
+        self.close_button = self._button("close", "关闭", "titleBarClose")
+        layout.addWidget(self.minimize)
+        layout.addWidget(self.maximize)
+        layout.addWidget(self.close_button)
+
+        self.minimize.clicked.connect(window.showMinimized)
+        self.maximize.clicked.connect(self.toggle_maximized)
+        self.close_button.clicked.connect(window.close)
+
+    @staticmethod
+    def _button(
+        kind: str, tooltip: str, name: str = "titleBarButton"
+    ) -> WindowControlButton:
+        return WindowControlButton(kind, tooltip, name)
+
+    def toggle_maximized(self) -> None:
+        if self._window.isMaximized():
+            self._window.showNormal()
+        else:
+            self._window.showMaximized()
+        QTimer.singleShot(0, self.sync_window_state)
+
+    def sync_window_state(self) -> None:
+        maximized = self._window.isMaximized()
+        self.maximize.set_restore_mode(maximized)
+        label = "还原" if maximized else "最大化"
+        self.maximize.setToolTip(label)
+        self.maximize.setAccessibleName(label)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt API
+        if event.button() == Qt.MouseButton.LeftButton:
+            handle = self._window.windowHandle()
+            if handle is not None and handle.startSystemMove():
+                event.accept()
+                return
+            self._drag_offset = (
+                event.globalPosition().toPoint()
+                - self._window.frameGeometry().topLeft()
+            )
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt API
+        if (
+            self._drag_offset is not None
+            and event.buttons() & Qt.MouseButton.LeftButton
+            and not self._window.isMaximized()
+        ):
+            self._window.move(event.globalPosition().toPoint() - self._drag_offset)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt API
+        self._drag_offset = None
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.toggle_maximized()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+
+class ThemedSizeGrip(QSizeGrip):
+    """Small frameless-window resize handle using the app's muted palette."""
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setObjectName("windowSizeGrip")
+        self.setFixedSize(15, 15)
+
+    def paintEvent(self, event: object) -> None:  # noqa: N802 - Qt API
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("#aaa69e"), 1.2))
+        for inset in (4, 7, 10):
+            painter.drawLine(
+                self.width() - inset,
+                self.height() - 2,
+                self.width() - 2,
+                self.height() - inset,
+            )
 
 
 class StatusChip(QLabel):

@@ -6,12 +6,11 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from PySide6.QtCore import QEasingCurve, QObject, QPropertyAnimation, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
-    QGraphicsOpacityEffect,
     QHBoxLayout,
     QListWidget,
     QListWidgetItem,
@@ -31,6 +30,7 @@ from asr_client.providers import DashScopeAsrProvider, DashScopeLlmProvider, Moc
 from asr_client.storage.config import ApiKeyStore, ConfigStore, ScenarioStore
 from asr_client.storage.database import Database
 from asr_client.ui.pages import FilePage, HistoryPage, RealtimePage, SettingsPage
+from asr_client.ui.widgets import ThemedSizeGrip, WindowTitleBar
 
 
 BEIJING_TIMEZONE = timezone(timedelta(hours=8))
@@ -63,6 +63,7 @@ class MainWindow(QMainWindow):
         startup_warning: str = "",
     ) -> None:
         super().__init__()
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
         self.database = database
         self.config_store = config_store
         self.key_store = key_store
@@ -94,7 +95,15 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         root = QWidget()
         root.setObjectName("appRoot")
-        layout = QHBoxLayout(root)
+        shell = QVBoxLayout(root)
+        shell.setContentsMargins(1, 1, 1, 1)
+        shell.setSpacing(0)
+        self.title_bar = WindowTitleBar(self)
+        shell.addWidget(self.title_bar)
+
+        content = QWidget()
+        content.setObjectName("appContent")
+        layout = QHBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         sidebar = QWidget()
@@ -131,7 +140,10 @@ class MainWindow(QMainWindow):
             self.pages.addWidget(page)
         layout.addWidget(sidebar)
         layout.addWidget(self.pages, 1)
+        shell.addWidget(content, 1)
         self.setCentralWidget(root)
+        self.size_grip = ThemedSizeGrip(root)
+        self.size_grip.raise_()
 
     def _connect(self) -> None:
         self.navigation.currentRowChanged.connect(self._switch_page)
@@ -181,17 +193,23 @@ class MainWindow(QMainWindow):
         if index < 0 or index >= self.pages.count():
             return
         self.pages.setCurrentIndex(index)
-        page = self.pages.currentWidget()
-        effect = QGraphicsOpacityEffect(page)
-        page.setGraphicsEffect(effect)
-        animation = QPropertyAnimation(effect, b"opacity", page)
-        animation.setDuration(210)
-        animation.setStartValue(0.2)
-        animation.setEndValue(1.0)
-        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-        page._reveal_animation = animation  # type: ignore[attr-defined]
-        animation.finished.connect(lambda: page.setGraphicsEffect(None))
-        animation.start()
+
+    def resizeEvent(self, event: object) -> None:  # noqa: N802 - Qt API
+        super().resizeEvent(event)  # type: ignore[arg-type]
+        if hasattr(self, "size_grip"):
+            root = self.centralWidget()
+            self.size_grip.move(
+                root.width() - self.size_grip.width(),
+                root.height() - self.size_grip.height(),
+            )
+            self.size_grip.setVisible(not self.isMaximized())
+            self.size_grip.raise_()
+
+    def changeEvent(self, event: QEvent) -> None:  # noqa: N802 - Qt API
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange and hasattr(self, "title_bar"):
+            self.title_bar.sync_window_state()
+            self.size_grip.setVisible(not self.isMaximized())
 
     def provider(self, config: AppConfig | None = None, key: str | None = None):
         snapshot = config or self.config
@@ -459,7 +477,9 @@ class MainWindow(QMainWindow):
 
     def save_settings(self, config: AppConfig, api_key: str) -> None:
         if not config.data_dir:
-            QMessageBox.warning(self, "数据目录为空", "请选择一个可写的数据目录。")
+            self.settings_page.set_page_status(
+                "自动保存暂停 · 请选择可写的数据目录", "danger"
+            )
             return
         try:
             Path(config.data_dir).mkdir(parents=True, exist_ok=True)
@@ -467,15 +487,15 @@ class MainWindow(QMainWindow):
             moving_database = target_database.resolve() != self.database.path.resolve()
             if moving_database:
                 if self._file_job or self._realtime_job:
-                    QMessageBox.warning(
-                        self, "任务进行中", "数据目录需在所有任务结束后更改。"
+                    self.settings_page.set_page_status(
+                        "自动保存暂停 · 请在当前任务结束后更改数据目录",
+                        "warning",
                     )
                     return
                 if target_database.exists():
-                    QMessageBox.warning(
-                        self,
-                        "目标目录已有数据",
-                        "目标目录中已有 justspeak.sqlite3，请选择空目录以避免覆盖历史。",
+                    self.settings_page.set_page_status(
+                        "自动保存暂停 · 目标目录中已有 justspeak.sqlite3",
+                        "danger",
                     )
                     return
                 self.database.backup_to(target_database)
@@ -486,17 +506,11 @@ class MainWindow(QMainWindow):
                 self.database = Database(target_database)
                 old_database.close()
             self.config = config
-            self.refresh_microphones()
-            self.settings_page.set_page_status("已保存", "success")
-            llm = config.llm_model or "未启用文本处理"
-            QMessageBox.information(
-                self,
-                "设置已保存",
-                f"ASR：{config.model}\nLLM：{llm}\nBase URL：{config.endpoint()}",
+            self.settings_page.set_page_status(
+                f"已自动保存 · {datetime.now().strftime('%H:%M:%S')}", "success"
             )
         except Exception as exc:
-            self.settings_page.set_page_status("保存失败", "danger")
-            QMessageBox.warning(self, "保存设置", str(exc))
+            self.settings_page.set_page_status(f"自动保存失败 · {exc}", "danger")
 
     def test_connection(self, config: AppConfig, api_key: str) -> None:
         if not api_key.strip():
@@ -756,7 +770,23 @@ class MainWindow(QMainWindow):
             )
         else:
             text = self.realtime_page.transcript.toPlainText()
+        if not text.strip():
+            self.realtime_page.set_page_status("当前没有可复制的文字", "warning")
+            return
         QApplication.clipboard().setText(text)
+        self.realtime_page.set_page_status("全文已复制到剪贴板", "success")
+        button = self.realtime_page.copy
+        button.setProperty("feedback", "success")
+        button.style().unpolish(button)
+        button.style().polish(button)
+
+        def clear_feedback() -> None:
+            if button.property("feedback") == "success":
+                button.setProperty("feedback", "")
+                button.style().unpolish(button)
+                button.style().polish(button)
+
+        QTimer.singleShot(1400, clear_feedback)
 
     def _save_file_edit(self) -> None:
         if self._file_session_id:

@@ -1,0 +1,13 @@
+{
+  "region": "beijing",
+  "workspace_id": "",
+  "websocket_url": "",
+  "model": "fun-asr-realtime",
+  "language": "zh",
+  "microphone": null,
+  "data_dir": "D:\\ASR-Client\\data",
+  "ffmpeg_path": "",
+  "chunk_seconds": 60,
+  "remember_key": false
+}
+

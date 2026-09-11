@@ -4,8 +4,6 @@ import hashlib
 import wave
 from pathlib import Path
 
-import numpy as np
-
 from asr_client.models import AudioChunk, CHANNELS, SAMPLE_RATE, SAMPLE_WIDTH
 
 
@@ -26,51 +24,23 @@ def plan_chunks(
     wav_path: Path,
     target_seconds: int = 60,
     search_seconds: int = 5,
-    overlap_seconds: float = 1.0,
+    overlap_seconds: float = 10.0,
 ) -> list[tuple[int, int, int]]:
     _, _, _, total = _wav_shape(wav_path)
-    target = max(30, min(120, int(target_seconds))) * SAMPLE_RATE
-    search = max(1, int(search_seconds)) * SAMPLE_RATE
-    overlap = int(overlap_seconds * SAMPLE_RATE)
-    min_piece = 10 * SAMPLE_RATE
-    analysis_window = SAMPLE_RATE // 10
+    target = max(60, min(600, int(target_seconds))) * SAMPLE_RATE
+    overlap = max(0, min(target - 1, int(overlap_seconds * SAMPLE_RATE)))
     planned: list[tuple[int, int, int]] = []
     start = 0
     overlap_before = 0
-    with wave.open(str(wav_path), "rb") as source:
-        while total - start > target:
-            ideal = start + target
-            low = max(start + min_piece, ideal - search)
-            high = min(total, ideal + search)
-            best = _quietest_window(source, low, high, analysis_window)
-            found_silence = best is not None and best[1] < 450
-            end = best[0] if found_silence else ideal
-            end = max(start + analysis_window, min(end, total))
-            planned.append((start, end, overlap_before))
-            next_start = end if found_silence else max(start + 1, end - overlap)
-            overlap_before = end - next_start
-            start = next_start
-        if start < total:
-            planned.append((start, total, overlap_before))
-    return planned
-
-
-def _quietest_window(
-    source: wave.Wave_read, low: int, high: int, window: int
-) -> tuple[int, int] | None:
-    best: tuple[int, int] | None = None
-    cursor = low
-    while cursor + window <= high:
-        source.setpos(cursor)
-        data = source.readframes(window)
-        if not data:
+    while start < total:
+        end = min(total, start + target)
+        planned.append((start, end, overlap_before))
+        if end >= total:
             break
-        values = np.frombuffer(data, dtype="<i2").astype(np.float32)
-        rms = int(np.sqrt(np.mean(values * values))) if len(values) else 0
-        if best is None or rms < best[1]:
-            best = (cursor + window // 2, rms)
-        cursor += window
-    return best
+        next_start = end - overlap
+        overlap_before = end - next_start
+        start = next_start
+    return planned
 
 
 def write_chunks(

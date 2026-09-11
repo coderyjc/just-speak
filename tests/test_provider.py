@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from asr_client.models import AppConfig
 from asr_client.providers.dashscope_asr import (
+    DashScopeAsrProvider,
+    _context_messages,
     _events_from_result,
     _http_base_url,
     _model_mode,
+    _multimodal_messages,
     _text_from_http_result,
     _websocket_url,
 )
@@ -35,6 +39,7 @@ def test_model_mode_selects_the_matching_dashscope_api() -> None:
     assert _model_mode("qwen-audio-3.0-asr-flash-streaming") == "recognition"
     assert _model_mode("qwen3-asr-flash") == "qwen3-http"
     assert _model_mode("qwen-audio-3.0-asr-flash") == "flash-http"
+    assert _model_mode("qwen3-asr-flash-filetrans") == "flash-http"
     assert _model_mode("fun-asr") == "public-url-only"
     assert _model_mode("qwen3-asr-flash-realtime") == "qwen3-realtime"
 
@@ -54,3 +59,50 @@ def test_http_response_text_shapes_are_supported() -> None:
     assert _text_from_http_result(
         {"output": {"choices": [{"message": {"content": [{"text": "第二段"}]}}]}}
     ) == "第二段"
+
+
+def test_context_message_precedes_audio_and_is_limited_to_400_chars() -> None:
+    messages = _multimodal_messages("data:audio/wav;base64,AAAA", "术" * 401)
+    assert messages[0] == {
+        "role": "user",
+        "content": [{"type": "input_text", "text": "术" * 400}],
+    }
+    assert messages[1]["content"][0]["type"] == "input_audio"
+    assert _context_messages("   ") == []
+
+
+def test_recognition_file_call_receives_context(monkeypatch, tmp_path) -> None:
+    calls = []
+
+    class Recognition:
+        def __init__(self, **kwargs):
+            pass
+
+        def call(self, path, **kwargs):
+            calls.append((path, kwargs))
+            return Result()
+
+    provider = DashScopeAsrProvider(
+        AppConfig(
+            model="qwen-audio-3.0-asr-flash-streaming",
+            transcription_prompt="JustSpeak、Aurora",
+        ),
+        "sk-test",
+    )
+    monkeypatch.setattr(
+        provider,
+        "_configure_recognition",
+        lambda: (None, Recognition, object),
+    )
+    events = provider.transcribe_file(tmp_path / "chunk.wav", "unit")
+    assert events[0].text == "你好"
+    assert calls[0][1]["raw_input"] == {
+        "context": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "JustSpeak、Aurora"}
+                ],
+            }
+        ]
+    }

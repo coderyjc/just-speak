@@ -2,11 +2,20 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, QRectF, Qt, QTimer
+from PySide6.QtCore import (
+    Property,
+    QEasingCurve,
+    QPropertyAnimation,
+    QRectF,
+    QSequentialAnimationGroup,
+    Qt,
+    QTimer,
+)
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
+    QGraphicsOpacityEffect,
     QLabel,
     QProgressBar,
     QWidget,
@@ -40,6 +49,45 @@ class StatusChip(QLabel):
         self.setProperty("tone", tone)
         self.style().unpolish(self)
         self.style().polish(self)
+
+
+class RecordingDot(QLabel):
+    """Small recording indicator with a restrained breathing blink."""
+
+    def __init__(self) -> None:
+        super().__init__("●")
+        self.setObjectName("recordingDot")
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setFixedSize(18, 18)
+        self.setAccessibleName("录音状态")
+        self._effect = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self._effect)
+        fade_out = QPropertyAnimation(self._effect, b"opacity", self)
+        fade_out.setDuration(620)
+        fade_out.setStartValue(1.0)
+        fade_out.setEndValue(0.28)
+        fade_out.setEasingCurve(QEasingCurve.Type.InOutSine)
+        fade_in = QPropertyAnimation(self._effect, b"opacity", self)
+        fade_in.setDuration(620)
+        fade_in.setStartValue(0.28)
+        fade_in.setEndValue(1.0)
+        fade_in.setEasingCurve(QEasingCurve.Type.InOutSine)
+        self._blink = QSequentialAnimationGroup(self)
+        self._blink.addAnimation(fade_out)
+        self._blink.addAnimation(fade_in)
+        self._blink.setLoopCount(-1)
+        self.set_active(False)
+
+    def set_active(self, active: bool) -> None:
+        self.setProperty("active", active)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        if active:
+            if self._blink.state() != self._blink.State.Running:
+                self._blink.start()
+        else:
+            self._blink.stop()
+            self._effect.setOpacity(1.0)
 
 
 class AnimatedProgressBar(QProgressBar):

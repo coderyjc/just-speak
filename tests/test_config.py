@@ -5,7 +5,7 @@ import json
 import keyring
 
 from asr_client.models import AppConfig
-from asr_client.storage.config import ApiKeyStore, ConfigStore
+from asr_client.storage.config import ApiKeyStore, ConfigStore, ScenarioStore
 
 
 def test_endpoint_generation() -> None:
@@ -35,12 +35,15 @@ def test_model_protocol_capabilities() -> None:
 
 def test_config_round_trip_contains_no_secret(tmp_path) -> None:
     store = ConfigStore(tmp_path / "config.json")
-    config = AppConfig(data_dir=str(tmp_path), chunk_seconds=999, remember_key=True)
+    config = AppConfig(
+        data_dir=str(tmp_path), chunk_seconds=99999, remember_key=True
+    )
     store.save(config)
     raw = json.loads(store.path.read_text(encoding="utf-8"))
     assert "api_key" not in raw
+    assert raw["_schema_version"] == 2
     loaded = store.load()
-    assert loaded.chunk_seconds == 120
+    assert loaded.chunk_seconds == 10 * 60
     assert loaded.remember_key is True
 
 
@@ -65,3 +68,42 @@ def test_legacy_websocket_url_is_migrated(tmp_path) -> None:
     loaded = ConfigStore(path).load()
     assert loaded.base_url == "wss://legacy.example/ws"
     assert loaded.websocket_url == ""
+
+
+def test_legacy_second_based_chunk_value_is_migrated_and_capped(tmp_path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"chunk_seconds": 60}), encoding="utf-8")
+    loaded = ConfigStore(path).load()
+    assert loaded.chunk_seconds == 10 * 60
+
+
+def test_scenarios_save_apply_replace_and_delete(tmp_path) -> None:
+    store = ScenarioStore(tmp_path / "scenarios.json")
+    current = AppConfig(
+        model="fun-asr-realtime",
+        llm_model="qwen-plus",
+        transcription_prompt="JustSpeak、百炼",
+        polish_prompt="整理成会议纪要：{text}",
+        chunk_seconds=7 * 60,
+        data_dir=str(tmp_path / "data"),
+    )
+    first = store.save("会议", current)
+    assert len(store.list()) == 1
+    updated = AppConfig(
+        model="qwen-audio-3.0-asr-flash-streaming",
+        llm_model="qwen-max",
+        transcription_prompt="Aurora、Qwen-Audio",
+        polish_prompt="保留行动项",
+        chunk_seconds=9 * 60,
+    )
+    second = store.save("会议", updated)
+    assert second["id"] == first["id"]
+    assert len(store.list()) == 1
+    applied = store.apply_to(str(first["id"]), current)
+    assert applied is not None
+    assert applied.llm_model == "qwen-max"
+    assert applied.transcription_prompt == "Aurora、Qwen-Audio"
+    assert applied.chunk_seconds == 9 * 60
+    assert applied.data_dir == current.data_dir
+    assert store.delete(str(first["id"]))
+    assert store.list() == []

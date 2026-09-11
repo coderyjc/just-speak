@@ -12,7 +12,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from asr_client.models import AppConfig, SAMPLE_RATE, TranscriptEvent
+from asr_client.models import (
+    MAX_TRANSCRIPTION_PROMPT_LENGTH,
+    AppConfig,
+    SAMPLE_RATE,
+    TranscriptEvent,
+)
 from asr_client.providers.base import AsrError, ErrorKind, EventSink, StreamingSession
 
 
@@ -21,6 +26,10 @@ _SDK_GLOBAL_LOCK = threading.Lock()
 
 def _model_mode(model: str) -> str:
     lowered = model.strip().lower()
+    # Some deployments expose this model through multimodal-generation with an
+    # input_text context message followed by input_audio.
+    if lowered.startswith("qwen3-asr-flash-filetrans"):
+        return "flash-http"
     if "filetrans" in lowered or lowered in {"fun-asr", "fun-asr-mtl"}:
         return "public-url-only"
     if lowered.startswith("qwen3-asr-flash") and "realtime" in lowered:
@@ -174,6 +183,34 @@ def _audio_data_uri(path: Path) -> str:
     return f"data:{mime_type};base64,{encoded}"
 
 
+def _context_messages(prompt: str) -> list[dict[str, Any]]:
+    text = prompt.strip()[:MAX_TRANSCRIPTION_PROMPT_LENGTH]
+    if not text:
+        return []
+    return [
+        {
+            "role": "user",
+            "content": [{"type": "input_text", "text": text}],
+        }
+    ]
+
+
+def _multimodal_messages(audio_data: str, prompt: str) -> list[dict[str, Any]]:
+    messages = _context_messages(prompt)
+    messages.append(
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_audio",
+                    "input_audio": {"data": audio_data},
+                }
+            ],
+        }
+    )
+    return messages
+
+
 def _single_text_event(
     text: str, path: Path, source_prefix: str, request_id: str, raw: Any
 ) -> list[TranscriptEvent]:
@@ -311,7 +348,13 @@ class DashScopeAsrProvider:
         _, Recognition, _ = self._configure_recognition()
         try:
             recognition = Recognition(callback=None, **self._options("wav"))
-            result = recognition.call(str(path))
+            context = _context_messages(self.config.transcription_prompt)
+            if context:
+                result = recognition.call(
+                    str(path), raw_input={"context": context}
+                )
+            else:
+                result = recognition.call(str(path))
         except Exception as exc:
             raise _error_from(exc) from exc
         status = getattr(result, "status_code", HTTPStatus.OK)
@@ -334,15 +377,24 @@ class DashScopeAsrProvider:
         if self.config.language != "auto":
             options["language"] = self.config.language
         try:
+            messages: list[dict[str, Any]] = []
+            prompt = self.config.transcription_prompt.strip()[
+                :MAX_TRANSCRIPTION_PROMPT_LENGTH
+            ]
+            if prompt:
+                messages.append(
+                    {"role": "user", "content": [{"text": prompt}]}
+                )
+            messages.append(
+                {
+                    "role": "user",
+                    "content": [{"audio": _audio_data_uri(path)}],
+                }
+            )
             response = conversation.call(
                 api_key=self.api_key,
                 model=self.config.model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [{"audio": _audio_data_uri(path)}],
-                    }
-                ],
+                messages=messages,
                 result_format="message",
                 asr_options=options,
             )
@@ -367,22 +419,22 @@ class DashScopeAsrProvider:
     ) -> list[TranscriptEvent]:
         http_base = _http_base_url(self.config.endpoint()).rstrip("/")
         url = f"{http_base}/services/aigc/multimodal-generation/generation"
+        parameters: dict[str, Any]
+        if self.config.model.strip().lower().startswith("qwen3-asr-flash"):
+            parameters = {}
+        else:
+            parameters = {
+                "format": path.suffix.lstrip(".") or "wav",
+                "sample_rate": str(SAMPLE_RATE),
+            }
         payload = {
             "model": self.config.model,
             "input": {
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "input_audio",
-                                "input_audio": {"data": _audio_data_uri(path)},
-                            }
-                        ],
-                    }
-                ]
+                "messages": _multimodal_messages(
+                    _audio_data_uri(path), self.config.transcription_prompt
+                )
             },
-            "parameters": {"format": path.suffix.lstrip(".") or "wav", "sample_rate": str(SAMPLE_RATE)},
+            "parameters": parameters,
         }
         request = urllib.request.Request(
             url,
@@ -395,7 +447,7 @@ class DashScopeAsrProvider:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=180) as response:
+            with urllib.request.urlopen(request, timeout=900) as response:
                 result = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             try:

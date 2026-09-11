@@ -58,8 +58,24 @@ CREATE TABLE IF NOT EXISTS segments (
     created_at TEXT NOT NULL,
     UNIQUE(session_id, source_key)
 );
+CREATE TABLE IF NOT EXISTS text_stages (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    stage TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    label TEXT NOT NULL,
+    text TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL,
+    model TEXT NOT NULL DEFAULT '',
+    prompt TEXT NOT NULL DEFAULT '',
+    request_id TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT '',
+    raw_json TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(session_id, stage)
+);
 CREATE INDEX IF NOT EXISTS idx_units_session ON units(session_id, ordinal);
 CREATE INDEX IF NOT EXISTS idx_segments_timeline ON segments(session_id, start_sample, id);
+CREATE INDEX IF NOT EXISTS idx_text_stages_session ON text_stages(session_id, ordinal);
 """
 
 
@@ -102,6 +118,26 @@ class Database:
 
     def recover_interrupted(self) -> None:
         with self.transaction() as db:
+            db.execute(
+                """UPDATE sessions SET edited_text=COALESCE(
+                    edited_text,
+                    (SELECT text FROM text_stages
+                     WHERE text_stages.session_id=sessions.id
+                       AND text_stages.status='completed'
+                     ORDER BY ordinal DESC LIMIT 1)
+                ) WHERE status IN (?, ?, ?)""",
+                (
+                    SessionStatus.RUNNING,
+                    SessionStatus.PREPARING,
+                    SessionStatus.RECOVERING,
+                ),
+            )
+            db.execute(
+                """UPDATE text_stages SET status='failed',
+                error='应用退出前文本处理未完成，已保留上一阶段结果',
+                updated_at=? WHERE status='running'""",
+                (utc_now(),),
+            )
             db.execute(
                 "UPDATE units SET status=? WHERE status=?",
                 (UnitStatus.PENDING, UnitStatus.RUNNING),
@@ -305,6 +341,68 @@ class Database:
                 (text, utc_now(), session_id),
             )
 
+    def save_text_stage(
+        self,
+        session_id: str,
+        stage: str,
+        ordinal: int,
+        label: str,
+        text: str = "",
+        status: str = "completed",
+        model: str = "",
+        prompt: str = "",
+        request_id: str = "",
+        error: str = "",
+        raw: Any = None,
+    ) -> None:
+        raw_json = None
+        if raw is not None:
+            try:
+                raw_json = json.dumps(raw, ensure_ascii=False, default=str)
+            except (TypeError, ValueError):
+                raw_json = str(raw)
+        with self.transaction() as db:
+            db.execute(
+                """INSERT INTO text_stages
+                (session_id, stage, ordinal, label, text, status, model, prompt,
+                 request_id, error, raw_json, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id, stage) DO UPDATE SET
+                  ordinal=excluded.ordinal,
+                  label=excluded.label,
+                  text=excluded.text,
+                  status=excluded.status,
+                  model=excluded.model,
+                  prompt=excluded.prompt,
+                  request_id=excluded.request_id,
+                  error=excluded.error,
+                  raw_json=excluded.raw_json,
+                  updated_at=excluded.updated_at""",
+                (
+                    session_id,
+                    stage,
+                    ordinal,
+                    label,
+                    text,
+                    status,
+                    model,
+                    prompt,
+                    request_id,
+                    error,
+                    raw_json,
+                    utc_now(),
+                ),
+            )
+
+    def text_stages(self, session_id: str) -> list[sqlite3.Row]:
+        with self._lock:
+            return list(
+                self._connection.execute(
+                    "SELECT * FROM text_stages WHERE session_id=? ORDER BY ordinal",
+                    (session_id,),
+                ).fetchall()
+            )
+
     def list_sessions(self) -> list[sqlite3.Row]:
         with self._lock:
             return list(
@@ -318,6 +416,11 @@ class Database:
             return self._connection.execute(
                 "SELECT * FROM sessions WHERE id=?", (session_id,)
             ).fetchone()
+
+    def delete_session(self, session_id: str) -> bool:
+        with self.transaction() as db:
+            cursor = db.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+            return cursor.rowcount > 0
 
     def incomplete_sessions(self) -> list[sqlite3.Row]:
         with self._lock:

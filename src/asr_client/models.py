@@ -9,6 +9,13 @@ from typing import Any
 SAMPLE_RATE = 16_000
 CHANNELS = 1
 SAMPLE_WIDTH = 2
+MAX_TRANSCRIPTION_PROMPT_LENGTH = 400
+
+DEFAULT_POLISH_PROMPT = """请在保留原意、事实、语气和专有名词的前提下，对文本进行定向修复：
+1. 调整表达顺序，使论述连贯、重点清楚；
+2. 修复明显的语病、指代不清和断裂句；
+3. 保留有意义的口语风格，不扩写原文中没有的信息；
+4. 只输出修复后的完整文本，不附加解释。"""
 
 
 class SessionStatus(StrEnum):
@@ -38,11 +45,14 @@ class AppConfig:
     # Kept for loading configuration files created before Base URL supported HTTP.
     websocket_url: str = ""
     model: str = "qwen-audio-3.0-asr-flash-streaming"
+    llm_model: str = ""
+    transcription_prompt: str = ""
+    polish_prompt: str = DEFAULT_POLISH_PROMPT
     language: str = "zh"
     microphone: int | None = None
     data_dir: str = ""
     ffmpeg_path: str = ""
-    chunk_seconds: int = 60
+    chunk_seconds: int = 10 * 60
     remember_key: bool = False
 
     def endpoint(self) -> str:
@@ -144,3 +154,10 @@ class JobUpdate:
     message: str = ""
     progress: int | None = None
     payload: Any = None
+
+
+@dataclass(slots=True)
+class TextModelResult:
+    text: str
+    request_id: str = ""
+    raw: dict[str, Any] | list[Any] | str | None = None

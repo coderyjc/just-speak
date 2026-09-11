@@ -16,14 +16,23 @@ from asr_client.jobs.common import atomic_write_text
 from asr_client.models import (
     AppConfig,
     AudioChunk,
+    DEFAULT_POLISH_PROMPT,
     JobUpdate,
     SAMPLE_RATE,
     SAMPLE_WIDTH,
     SessionStatus,
+    TextModelResult,
     TranscriptEvent,
     UnitStatus,
 )
-from asr_client.providers.base import AsrError, AsrProvider, ErrorKind, StreamingSession
+from asr_client.providers.base import (
+    AsrError,
+    AsrProvider,
+    ErrorKind,
+    StreamingSession,
+    TextProvider,
+)
+from asr_client.providers.dashscope_llm import CLEAR_TEXT_PROMPT
 from asr_client.storage.database import Database
 
 
@@ -40,12 +49,16 @@ class RealtimeJob:
         config: AppConfig,
         update: UpdateSink | None = None,
         stop_timeout: float = 15.0,
+        text_provider: TextProvider | None = None,
+        text_stage_timeout: float = 60.0,
     ) -> None:
         self.database = database
         self.provider = provider
         self.config = AppConfig(**config.snapshot())
         self.update = update or (lambda _: None)
         self.stop_timeout = stop_timeout
+        self.text_provider = text_provider
+        self.text_stage_timeout = max(0.1, float(text_stage_timeout))
         self._stop_requested = threading.Event()
         self._capture_done = threading.Event()
         self._writer_done = threading.Event()
@@ -451,9 +464,185 @@ class RealtimeJob:
                 self._publish()
                 self.update(JobUpdate("incomplete", "录音已保存，部分区间等待重试"))
                 return
-        self.database.set_session_status(self.session_id, SessionStatus.COMPLETED)
         self._publish()
-        self.update(JobUpdate("completed", "录音与转写已完成", 100, self.session_id))
+        pipeline_errors = self._process_text_pipeline()
+        self.database.set_session_status(
+            self.session_id,
+            SessionStatus.COMPLETED,
+            "；".join(pipeline_errors),
+        )
+        message = "录音、清晰化与定向修复已完成"
+        if pipeline_errors:
+            message = "录音已完成，部分文本处理未成功"
+        elif self.text_provider is None or not self.config.llm_model.strip():
+            message = "录音与转写已完成；配置 LLM 后可自动清晰化"
+        self.update(JobUpdate("completed", message, 100, self.session_id))
+
+    def _process_text_pipeline(self) -> list[str]:
+        raw_text = self.database.transcript(self.session_id, include_pending=False).strip()
+        self.database.save_text_stage(
+            self.session_id, "asr", 0, "实时录音", raw_text, "completed"
+        )
+        atomic_write_text(self.task_dir / "stages" / "01-realtime.txt", raw_text)
+        self.update(
+            JobUpdate(
+                "pipeline",
+                "实时录音已完成",
+                payload={"stage": "asr", "state": "completed", "text": raw_text},
+            )
+        )
+        if not raw_text:
+            return []
+        if self.text_provider is None or not self.config.llm_model.strip():
+            for stage, ordinal, label in (
+                ("clarity", 1, "文本清晰"),
+                ("polish", 2, "定向修复"),
+            ):
+                self.database.save_text_stage(
+                    self.session_id,
+                    stage,
+                    ordinal,
+                    label,
+                    status="skipped",
+                    error="未配置 LLM Model ID",
+                )
+                self.update(
+                    JobUpdate(
+                        "pipeline",
+                        f"{label}已跳过",
+                        payload={"stage": stage, "state": "skipped", "text": ""},
+                    )
+                )
+            return []
+
+        errors: list[str] = []
+        current_text = raw_text
+        stages = (
+            ("clarity", 1, "文本清晰", CLEAR_TEXT_PROMPT),
+            (
+                "polish",
+                2,
+                "定向修复",
+                self.config.polish_prompt.strip() or DEFAULT_POLISH_PROMPT,
+            ),
+        )
+        for stage, ordinal, label, prompt in stages:
+            self.database.save_text_stage(
+                self.session_id,
+                stage,
+                ordinal,
+                label,
+                current_text,
+                "running",
+                self.config.llm_model,
+                prompt,
+            )
+            self.update(
+                JobUpdate(
+                    "pipeline",
+                    f"正在进行{label} · 最长等待 {self.text_stage_timeout:g} 秒",
+                    payload={"stage": stage, "state": "running", "text": current_text},
+                )
+            )
+            try:
+                result = self._complete_text_stage(prompt, current_text, label)
+                current_text = result.text.strip()
+                self.database.save_text_stage(
+                    self.session_id,
+                    stage,
+                    ordinal,
+                    label,
+                    current_text,
+                    "completed",
+                    self.config.llm_model,
+                    prompt,
+                    result.request_id,
+                    raw=result.raw,
+                )
+                atomic_write_text(
+                    self.task_dir / "stages" / f"{ordinal + 1:02d}-{stage}.txt",
+                    current_text,
+                )
+                self.update(
+                    JobUpdate(
+                        "pipeline",
+                        f"{label}已完成",
+                        payload={
+                            "stage": stage,
+                            "state": "completed",
+                            "text": current_text,
+                        },
+                    )
+                )
+                self.database.save_edited_text(self.session_id, current_text)
+                atomic_write_text(self.task_dir / "transcript.txt", current_text)
+            except Exception as exc:
+                message = str(exc)
+                errors.append(f"{label}：{message}")
+                self.database.save_text_stage(
+                    self.session_id,
+                    stage,
+                    ordinal,
+                    label,
+                    current_text,
+                    "failed",
+                    self.config.llm_model,
+                    prompt,
+                    error=message,
+                )
+                atomic_write_text(
+                    self.task_dir / "stages" / f"{ordinal + 1:02d}-{stage}.txt",
+                    current_text,
+                )
+                self.update(
+                    JobUpdate(
+                        "pipeline",
+                        f"{label}失败：{message}",
+                        payload={
+                            "stage": stage,
+                            "state": "failed",
+                            "text": current_text,
+                            "error": message,
+                        },
+                    )
+                )
+        self.database.save_edited_text(self.session_id, current_text)
+        atomic_write_text(self.task_dir / "transcript.txt", current_text)
+        return errors
+
+    def _complete_text_stage(
+        self, prompt: str, text: str, label: str
+    ) -> TextModelResult:
+        if self.text_provider is None:
+            raise AsrError("文本模型未配置", ErrorKind.CONFIGURATION)
+        outcome: queue.Queue[tuple[TextModelResult | None, Exception | None]] = (
+            queue.Queue(maxsize=1)
+        )
+
+        def invoke() -> None:
+            try:
+                outcome.put((self.text_provider.complete(prompt, text), None))
+            except Exception as exc:
+                outcome.put((None, exc))
+
+        worker = threading.Thread(
+            target=invoke,
+            name=f"llm-{label}-{self.session_id[:8]}",
+            daemon=True,
+        )
+        worker.start()
+        try:
+            result, error = outcome.get(timeout=self.text_stage_timeout)
+        except queue.Empty as exc:
+            raise AsrError(
+                f"{label}超过 {self.text_stage_timeout:g} 秒，已停止等待并保留上一阶段结果",
+                ErrorKind.TEMPORARY,
+            ) from exc
+        if error is not None:
+            raise error
+        if result is None:
+            raise AsrError(f"{label}没有返回结果", ErrorKind.TEMPORARY)
+        return result
 
     def _prepare_gap_units(self) -> None:
         chunks: list[AudioChunk] = []

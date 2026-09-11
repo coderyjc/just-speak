@@ -7,7 +7,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Callable, Protocol
 
-from asr_client.models import SAMPLE_RATE, TranscriptEvent
+from asr_client.models import SAMPLE_RATE, TextModelResult, TranscriptEvent
 
 
 class ErrorKind(StrEnum):
@@ -56,6 +56,10 @@ class AsrProvider(Protocol):
     def transcribe_file(self, path: Path, source_prefix: str) -> list[TranscriptEvent]: ...
 
     def start_stream(self, sink: EventSink) -> StreamingSession: ...
+
+
+class TextProvider(Protocol):
+    def complete(self, prompt_template: str, text: str) -> TextModelResult: ...
 
 
 class _MockStream:

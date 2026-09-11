@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import shutil
 import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from PySide6.QtCore import QEasingCurve, QObject, QPropertyAnimation, Qt, QTimer, Signal
@@ -9,10 +11,8 @@ from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
-    QFrame,
     QGraphicsOpacityEffect,
     QHBoxLayout,
-    QLabel,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
@@ -27,10 +27,23 @@ from asr_client.jobs.common import export_transcript
 from asr_client.jobs.file_job import FileTranscriptionJob, extract_audio_only
 from asr_client.jobs.realtime_job import GapRecoveryJob, RealtimeJob
 from asr_client.models import AppConfig, JobUpdate, SessionStatus
-from asr_client.providers import DashScopeAsrProvider, MockAsrProvider
-from asr_client.storage.config import ApiKeyStore, ConfigStore
+from asr_client.providers import DashScopeAsrProvider, DashScopeLlmProvider, MockAsrProvider
+from asr_client.storage.config import ApiKeyStore, ConfigStore, ScenarioStore
 from asr_client.storage.database import Database
 from asr_client.ui.pages import FilePage, HistoryPage, RealtimePage, SettingsPage
+
+
+BEIJING_TIMEZONE = timezone(timedelta(hours=8))
+
+
+def _format_history_time(value: object) -> str:
+    try:
+        parsed = datetime.fromisoformat(str(value))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(BEIJING_TIMEZONE).strftime("%m-%d %H:%M")
+    except (TypeError, ValueError):
+        return str(value)[:16].replace("T", " ")
 
 
 class Bridge(QObject):
@@ -53,6 +66,9 @@ class MainWindow(QMainWindow):
         self.database = database
         self.config_store = config_store
         self.key_store = key_store
+        self.scenario_store = ScenarioStore(
+            self.config_store.path.with_name("scenarios.json")
+        )
         self.config = config_store.load()
         self._file_job: FileTranscriptionJob | GapRecoveryJob | None = None
         self._realtime_job: RealtimeJob | None = None
@@ -63,8 +79,8 @@ class MainWindow(QMainWindow):
         self._connection_test = False
         self.bridge = Bridge()
         self.setWindowTitle("JustSpeak · 云端语音转文字")
-        self.resize(1120, 760)
-        self.setMinimumSize(960, 650)
+        self.resize(784, 532)
+        self.setMinimumSize(672, 455)
         self._build_ui()
         self._connect()
         self.refresh_microphones()
@@ -83,66 +99,25 @@ class MainWindow(QMainWindow):
         layout.setSpacing(0)
         sidebar = QWidget()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(224)
+        sidebar.setFixedWidth(120)
         side = QVBoxLayout(sidebar)
-        side.setContentsMargins(20, 25, 20, 20)
-        brand_row = QHBoxLayout()
-        brand_mark = QLabel("JS")
-        brand_mark.setObjectName("brandMark")
-        brand_mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        brand_mark.setFixedSize(38, 38)
-        brand_row.addWidget(brand_mark)
-        brand_copy = QVBoxLayout()
-        brand_copy.setSpacing(0)
-        brand = QLabel("JustSpeak")
-        brand.setObjectName("brand")
-        tagline = QLabel("VOICE WORKSPACE")
-        tagline.setObjectName("tagline")
-        brand_copy.addWidget(brand)
-        brand_copy.addWidget(tagline)
-        brand_row.addLayout(brand_copy, 1)
-        side.addLayout(brand_row)
-        side.addSpacing(30)
-        menu_label = QLabel("工作区")
-        menu_label.setObjectName("sidebarLabel")
-        side.addWidget(menu_label)
-        side.addSpacing(5)
+        side.setContentsMargins(8, 10, 8, 10)
         self.navigation = QListWidget()
         self.navigation.setObjectName("navigation")
         self.navigation.setSpacing(2)
-        for name in ("01   实时录音", "02   文件转写", "03   历史记录", "04   设置"):
+        for name in ("实时录音", "文件转写", "历史记录", "设置"):
             self.navigation.addItem(name)
         self.navigation.setCurrentRow(0)
         side.addWidget(self.navigation, 1)
-        privacy = QFrame()
-        privacy.setObjectName("privacyBadge")
-        privacy_layout = QHBoxLayout(privacy)
-        privacy_layout.setContentsMargins(11, 10, 11, 10)
-        privacy_layout.setSpacing(8)
-        privacy_dot = QLabel("●")
-        privacy_dot.setObjectName("privacyDot")
-        privacy_layout.addWidget(privacy_dot, 0, Qt.AlignmentFlag.AlignTop)
-        privacy_copy = QVBoxLayout()
-        privacy_copy.setSpacing(2)
-        privacy_title = QLabel("本机安全落盘")
-        privacy_title.setObjectName("privacyTitle")
-        mode = QLabel("识别由百炼完成\n本机无模型下载")
-        mode.setObjectName("sideNotice")
-        privacy_copy.addWidget(privacy_title)
-        privacy_copy.addWidget(mode)
-        privacy_layout.addLayout(privacy_copy, 1)
-        side.addWidget(privacy)
-        side.addSpacing(10)
-        version = QLabel("OPEN SOURCE · V0.1")
-        version.setObjectName("sidebarLabel")
-        side.addWidget(version)
 
         self.pages = QStackedWidget()
         self.pages.setObjectName("pageStack")
         self.realtime_page = RealtimePage()
         self.file_page = FilePage()
         self.history_page = HistoryPage()
-        self.settings_page = SettingsPage(self.config, self.key_store.get())
+        self.settings_page = SettingsPage(
+            self.config, self.key_store.get(), self.scenario_store.list()
+        )
         if self.key_store.get():
             self.settings_page.set_page_status("云端已配置", "success")
         else:
@@ -184,10 +159,14 @@ class MainWindow(QMainWindow):
         self.file_page.save_requested.connect(self._save_file_edit)
         self.settings_page.save_requested.connect(self.save_settings)
         self.settings_page.test_requested.connect(self.test_connection)
+        self.settings_page.scenario_save_requested.connect(self.save_scenario)
+        self.settings_page.scenario_apply_requested.connect(self.apply_scenario)
+        self.settings_page.scenario_delete_requested.connect(self.delete_scenario)
         self.history_page.selection_changed.connect(self.show_history)
         self.history_page.retry_requested.connect(self.retry_history)
         self.history_page.save_requested.connect(self.save_history_edit)
         self.history_page.export_requested.connect(self.export_history)
+        self.history_page.delete_requested.connect(self.delete_history)
         self.bridge.file_update.connect(lambda update: self.on_job_update("file", update))
         self.bridge.realtime_update.connect(
             lambda update: self.on_job_update("realtime", update)
@@ -221,6 +200,15 @@ class MainWindow(QMainWindow):
             return DashScopeAsrProvider(snapshot, api_key)
         return MockAsrProvider()
 
+    def text_provider(
+        self, config: AppConfig | None = None, key: str | None = None
+    ) -> DashScopeLlmProvider | None:
+        snapshot = config or self.config
+        api_key = self.key_store.get() if key is None else key.strip()
+        if api_key and snapshot.llm_model.strip():
+            return DashScopeLlmProvider(snapshot, api_key)
+        return None
+
     def refresh_microphones(self) -> None:
         self.realtime_page.device.clear()
         try:
@@ -248,7 +236,9 @@ class MainWindow(QMainWindow):
             return
         if self._file_job is not None:
             self._file_job.pause()
-            self.file_page.status.setText("实时录音优先，文件任务将在当前片段后暂停")
+            self.file_page.set_page_status(
+                "实时录音优先，文件任务将在当前片段后暂停", "warning"
+            )
         config = AppConfig(**self.config.snapshot())
         device = self.realtime_page.device.currentData()
         if device is None:
@@ -271,13 +261,16 @@ class MainWindow(QMainWindow):
                 provider,
                 config,
                 self.bridge.realtime_update.emit,
+                text_provider=(
+                    None if self._connection_test else self.text_provider(config)
+                ),
             )
         except Exception as exc:
             QMessageBox.critical(self, "无法开始录音", str(exc))
             self._realtime_job = None
             return
         self._realtime_session_id = self._realtime_job.session_id
-        self.realtime_page.transcript.clear()
+        self.realtime_page.reset_pipeline()
         self.realtime_page.set_running(True)
         self._realtime_thread = threading.Thread(
             target=self._realtime_job.run, name="realtime-job", daemon=True
@@ -286,15 +279,14 @@ class MainWindow(QMainWindow):
 
     def stop_realtime(self) -> None:
         if self._realtime_job:
-            self.realtime_page.status.setText("正在停止并等待最后结果…")
+            self.realtime_page.set_page_status("正在停止并等待最后结果…", "warning")
             self._realtime_job.stop()
             self.realtime_page.stop.setEnabled(False)
 
     def inspect_media(self, path: str) -> None:
         if not path:
             return
-        self.file_page.status.setText("正在检查媒体…")
-        self.file_page.set_page_status("正在检查", "warning")
+        self.file_page.set_page_status("正在检查媒体…", "warning")
 
         def work() -> None:
             try:
@@ -307,11 +299,10 @@ class MainWindow(QMainWindow):
 
     def on_media_inspected(self, info: object, error: object) -> None:
         if error:
-            self.file_page.status.setText(str(error))
             self.file_page.track.clear()
             self.file_page.start.setEnabled(False)
             self.file_page.only_extract.setEnabled(False)
-            self.file_page.set_page_status("文件不可用", "danger")
+            self.file_page.set_page_status(f"文件不可用 · {error}", "danger")
             return
         self.file_page.set_tracks(info.tracks, info.duration_seconds)
 
@@ -385,38 +376,52 @@ class MainWindow(QMainWindow):
             self.realtime_page.set_level(float(update.payload or 0))
             return
         if update.kind == "network":
-            self.realtime_page.status.setText(update.message)
             if "已连接" in update.message:
-                self.realtime_page.set_page_status("云端已连接", "success")
+                self.realtime_page.set_page_status(update.message, "success")
             else:
-                self.realtime_page.set_page_status("连接波动", "warning")
+                self.realtime_page.set_page_status(update.message, "warning")
             return
         if update.kind == "progress":
             self.file_page.progress.setValue(update.progress or 0)
-            self.file_page.status.setText(update.message)
-            self.file_page.set_page_status(f"{update.progress or 0}%", "live")
+            self.file_page.set_page_status(
+                f"{update.message} · {update.progress or 0}%", "live"
+            )
             return
         if update.kind == "transcript":
             if source == "realtime":
-                self.realtime_page.transcript.setPlainText(str(update.payload or ""))
+                self.realtime_page.set_stage_text("asr", str(update.payload or ""))
             else:
                 self.file_page.transcript.setPlainText(str(update.payload or ""))
             return
+        if update.kind == "pipeline" and source == "realtime":
+            payload = update.payload if isinstance(update.payload, dict) else {}
+            stage = str(payload.get("stage") or "asr")
+            state = str(payload.get("state") or "running")
+            text = str(payload.get("text") or "")
+            self.realtime_page.set_stage_state(stage, state, text)
+            tone = "danger" if state == "failed" else (
+                "success" if state == "completed" else "live"
+            )
+            self.realtime_page.set_page_status(update.message, tone)
+            return
         if update.kind in {"status", "started"}:
             if source == "realtime":
-                self.realtime_page.status.setText(update.message)
-                self.realtime_page.set_page_status("录音中", "live")
+                self.realtime_page.set_page_status(update.message, "live")
             else:
-                self.file_page.status.setText(update.message)
-                self.file_page.set_page_status("处理中", "live")
+                self.file_page.set_page_status(update.message, "live")
             return
         if update.kind in {"completed", "incomplete", "error", "cancelled"}:
             if source == "realtime":
-                self.realtime_page.status.setText(update.message)
+                if update.kind == "completed":
+                    self.realtime_page.finish_pipeline()
                 self.realtime_page.set_running(False)
                 self.realtime_page.set_page_status(
-                    "已完成" if update.kind == "completed" else "需要处理",
-                    "success" if update.kind == "completed" else "warning",
+                    update.message,
+                    (
+                        "warning"
+                        if update.kind != "completed" or "部分" in update.message
+                        else "success"
+                    ),
                 )
                 self._realtime_job = None
                 if update.kind != "completed":
@@ -429,10 +434,9 @@ class MainWindow(QMainWindow):
                     else:
                         QMessageBox.critical(self, "连接测试失败", update.message)
             elif self._file_job is not None:
-                self.file_page.status.setText(update.message)
                 self.file_page.set_running(False)
                 self.file_page.set_page_status(
-                    "已完成" if update.kind == "completed" else "需要处理",
+                    update.message,
                     "success" if update.kind == "completed" else "warning",
                 )
                 if update.kind != "completed":
@@ -484,7 +488,12 @@ class MainWindow(QMainWindow):
             self.config = config
             self.refresh_microphones()
             self.settings_page.set_page_status("已保存", "success")
-            QMessageBox.information(self, "设置已保存", f"新任务将使用：\n{config.endpoint()}")
+            llm = config.llm_model or "未启用文本处理"
+            QMessageBox.information(
+                self,
+                "设置已保存",
+                f"ASR：{config.model}\nLLM：{llm}\nBase URL：{config.endpoint()}",
+            )
         except Exception as exc:
             self.settings_page.set_page_status("保存失败", "danger")
             QMessageBox.warning(self, "保存设置", str(exc))
@@ -522,9 +531,17 @@ class MainWindow(QMainWindow):
         }
         rows = self.database.list_sessions()
         for index, row in enumerate(rows):
-            item = QListWidgetItem(
-                f"{row['title']}\n{status_labels.get(row['status'], row['status'])} · {row['created_at'][:16].replace('T', ' ')}"
+            status_label = status_labels.get(row["status"], row["status"])
+            if row["status"] == SessionStatus.COMPLETED and row["error"]:
+                status_label = "部分完成"
+            title = str(row["title"] or "未命名文稿")
+            short_title = self.history_page.sessions.fontMetrics().elidedText(
+                title, Qt.TextElideMode.ElideMiddle, 180
             )
+            item = QListWidgetItem(
+                f"{short_title}\n{status_label} · {_format_history_time(row['created_at'])}"
+            )
+            item.setToolTip(title)
             item.setData(Qt.ItemDataRole.UserRole, row["id"])
             self.history_page.sessions.addItem(item)
             if row["id"] == current_id:
@@ -540,10 +557,17 @@ class MainWindow(QMainWindow):
         row = self.database.get_session(session_id)
         if not row:
             return
-        self.history_page.text.setPlainText(self.database.transcript(session_id))
+        final_text = self.database.transcript(session_id)
+        stages = [dict(item) for item in self.database.text_stages(session_id)]
         completed = row["status"] == SessionStatus.COMPLETED
-        self.history_page.text.setReadOnly(not completed)
-        self.history_page.save.setEnabled(completed)
+        self.history_page.set_pipeline(
+            session_id,
+            str(row["title"] or "未命名文稿"),
+            stages,
+            final_text,
+            completed,
+            row["kind"] == "realtime",
+        )
         pending = self.database.pending_units(session_id)
         retryable = bool(pending) and row["status"] in {
             SessionStatus.INCOMPLETE,
@@ -552,9 +576,16 @@ class MainWindow(QMainWindow):
             SessionStatus.CANCELLED,
         }
         self.history_page.retry.setEnabled(retryable and self._file_job is None and self._realtime_job is None)
-        tone = "success" if completed else ("warning" if retryable else "idle")
+        tone = "success" if completed and not row["error"] else (
+            "warning" if retryable or row["error"] else "idle"
+        )
         self.history_page.set_page_status(
-            "已完成" if completed else str(row["status"]), tone
+            (
+                "部分完成"
+                if completed and row["error"]
+                else "已完成" if completed else str(row["status"])
+            ),
+            tone,
         )
 
     def retry_history(self, session_id: str) -> None:
@@ -611,6 +642,102 @@ class MainWindow(QMainWindow):
         row = self.database.get_session(session_id)
         title = row["title"] if row else "转写"
         self._export_text(self.database.transcript(session_id), f"{Path(title).stem}.txt")
+
+    def delete_history(self, session_id: str) -> None:
+        if session_id in {self._realtime_session_id, self._file_session_id} and (
+            self._realtime_job or self._file_job
+        ):
+            QMessageBox.warning(self, "任务进行中", "请先结束当前任务，再删除该记录。")
+            return
+        row = self.database.get_session(session_id)
+        if not row:
+            return
+        answer = QMessageBox.question(
+            self,
+            "删除历史记录",
+            f"确定删除“{row['title']}”及其本地音频、转写结果和处理阶段吗？\n\n"
+            "删除后无法恢复。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        task_dir = Path(row["task_dir"])
+        staged: Path | None = None
+        try:
+            if task_dir.exists():
+                resolved = task_dir.resolve()
+                if resolved.name != session_id or resolved.parent.name != "tasks":
+                    raise RuntimeError("任务目录校验失败，已停止删除本地文件")
+                staged = resolved.with_name(f".{session_id}.deleting")
+                if staged.exists():
+                    raise RuntimeError(f"临时删除目录已存在：{staged}")
+                resolved.rename(staged)
+            if not self.database.delete_session(session_id):
+                raise RuntimeError("数据库中没有找到该记录")
+        except Exception as exc:
+            if staged and staged.exists() and not task_dir.exists():
+                try:
+                    staged.rename(task_dir)
+                except OSError:
+                    pass
+            QMessageBox.critical(self, "删除失败", str(exc))
+            return
+        if staged and staged.exists():
+            try:
+                shutil.rmtree(staged)
+            except OSError as exc:
+                QMessageBox.warning(
+                    self,
+                    "记录已删除",
+                    f"数据库记录已经删除，残留文件夹需要手动清理：\n{staged}\n\n{exc}",
+                )
+        if self._realtime_session_id == session_id:
+            self._realtime_session_id = ""
+        if self._file_session_id == session_id:
+            self._file_session_id = ""
+        self.history_page.clear_detail()
+        self.refresh_history()
+
+    def save_scenario(self, name: str, config: AppConfig) -> None:
+        try:
+            item = self.scenario_store.save(name, config)
+            self.settings_page.set_scenarios(
+                self.scenario_store.list(), str(item.get("id") or "")
+            )
+            self.settings_page.set_page_status(f"场景“{name}”已保存", "success")
+        except Exception as exc:
+            QMessageBox.warning(self, "保存场景失败", str(exc))
+
+    def apply_scenario(self, scenario_id: str) -> None:
+        config = self.scenario_store.apply_to(
+            scenario_id, self.settings_page.values()
+        )
+        if config is None:
+            QMessageBox.warning(self, "场景不存在", "该场景可能已经被删除。")
+            return
+        self.settings_page.apply_config(config)
+        self.config = config
+        self.config_store.save(config)
+        item = self.scenario_store.get(scenario_id)
+        name = str(item.get("name") if item else "场景")
+        self.settings_page.set_page_status(f"已应用 · {name}", "success")
+
+    def delete_scenario(self, scenario_id: str) -> None:
+        item = self.scenario_store.get(scenario_id)
+        if item is None:
+            return
+        answer = QMessageBox.question(
+            self,
+            "删除场景",
+            f"确定删除场景“{item.get('name')}”吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.scenario_store.delete(scenario_id)
+            self.settings_page.set_scenarios(self.scenario_store.list())
+            self.settings_page.set_page_status("场景已删除", "idle")
 
     def _save_realtime_edit(self) -> None:
         if self._realtime_session_id:

@@ -54,3 +54,43 @@ def test_database_backup_preserves_history(tmp_path) -> None:
     assert destination.get_session(session)["title"] == "sample"
     destination.close()
     source.close()
+
+
+def test_text_stages_are_updated_and_removed_with_session(tmp_path) -> None:
+    db = Database(tmp_path / "test.sqlite3")
+    session = db.create_session("realtime", "sample", tmp_path / "task", {})
+    db.save_text_stage(session, "asr", 0, "实时录音", "原始文字")
+    db.save_text_stage(session, "clarity", 1, "文本清晰", "清晰文字")
+    db.save_text_stage(
+        session, "clarity", 1, "文本清晰", "更新文字", request_id="llm-1"
+    )
+    stages = db.text_stages(session)
+    assert [row["stage"] for row in stages] == ["asr", "clarity"]
+    assert stages[1]["text"] == "更新文字"
+    assert stages[1]["request_id"] == "llm-1"
+    assert db.delete_session(session)
+    assert db.text_stages(session) == []
+    db.close()
+
+
+def test_recovery_fails_running_text_stage_and_keeps_latest_completed_text(
+    tmp_path,
+) -> None:
+    path = tmp_path / "test.sqlite3"
+    db = Database(path)
+    session = db.create_session("realtime", "录音", tmp_path / "task", {})
+    db.save_text_stage(session, "asr", 0, "实时录音", "原始文字")
+    db.save_text_stage(session, "clarity", 1, "文本清晰", "清晰文字")
+    db.save_text_stage(
+        session, "polish", 2, "定向修复", "清晰文字", status="running"
+    )
+    db.set_session_status(session, SessionStatus.RUNNING)
+    db.close()
+
+    recovered = Database(path)
+    assert recovered.get_session(session)["status"] == SessionStatus.INCOMPLETE
+    assert recovered.transcript(session) == "清晰文字"
+    stages = {row["stage"]: row for row in recovered.text_stages(session)}
+    assert stages["polish"]["status"] == "failed"
+    assert "上一阶段结果" in stages["polish"]["error"]
+    recovered.close()

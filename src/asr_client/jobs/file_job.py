@@ -143,7 +143,12 @@ class FileTranscriptionJob:
         convert_to_standard_wav(
             self.source, self.standard_wav, self.track_index, self.config.ffmpeg_path
         )
-        self.update(JobUpdate("status", "正在生成分段清单"))
+        self.update(
+            JobUpdate(
+                "status",
+                f"正在生成 {self.config.chunk_seconds // 60} 分钟切片 · 重叠 10 秒",
+            )
+        )
         chunks = write_chunks(
             self.standard_wav,
             self.task_dir / "chunks",

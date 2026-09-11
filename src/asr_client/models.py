@@ -53,6 +53,11 @@ class AppConfig:
     data_dir: str = ""
     ffmpeg_path: str = ""
     chunk_seconds: int = 10 * 60
+    history_limit: int = 50
+    realtime_toggle_shortcut: str = "Space"
+    realtime_toggle_shortcut_enabled: bool = True
+    realtime_stop_shortcut: str = "S"
+    realtime_stop_shortcut_enabled: bool = True
     remember_key: bool = False
 
     def endpoint(self) -> str:

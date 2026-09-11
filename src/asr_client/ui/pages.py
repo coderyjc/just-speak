@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QWheelEvent
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QKeySequence, QWheelEvent
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QInputDialog,
+    QKeySequenceEdit,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -406,9 +407,11 @@ class RealtimePage(Page):
         self.start = _icon_button(
             QStyle.StandardPixmap.SP_MediaPlay, "开始录音", "primaryIconButton"
         )
+        self.start.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.stop = _icon_button(
             QStyle.StandardPixmap.SP_MediaStop, "停止并完成", "dangerIconButton"
         )
+        self.stop.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.stop.setEnabled(False)
         control_row.addWidget(self.refresh)
         control_row.addWidget(self.start)
@@ -455,18 +458,50 @@ class RealtimePage(Page):
         self._selected_stage = "asr"
         self._final_stage = "asr"
         self._recording_running = False
+        self._recording_state = "idle"
+        self._toggle_shortcut_hint = "Space"
+        self._stop_shortcut_hint = "S"
+        self.set_recording_state("idle")
         self.reset_pipeline()
 
     def set_running(self, running: bool) -> None:
-        self._recording_running = running
-        self.start.setEnabled(not running)
-        self.stop.setEnabled(running)
-        self.device.setEnabled(not running)
-        self.refresh.setEnabled(not running)
+        self.set_recording_state("recording" if running else "idle")
+
+    def set_recording_state(self, state: str) -> None:
+        if state not in {"idle", "recording", "paused", "stopping"}:
+            return
+        self._recording_state = state
+        active = state != "idle"
+        recording = state == "recording"
+        paused = state == "paused"
+        self._recording_running = active
+        self.start.setIcon(
+            self.style().standardIcon(
+                QStyle.StandardPixmap.SP_MediaPause
+                if recording
+                else QStyle.StandardPixmap.SP_MediaPlay
+            )
+        )
+        self.start.setProperty("mode", "pause" if recording else "start")
+        self.start.style().unpolish(self.start)
+        self.start.style().polish(self.start)
+        self.start.setEnabled(state in {"recording", "paused"} or (
+            state == "idle" and self.device.currentData() is not None
+        ))
+        self.stop.setEnabled(state in {"recording", "paused"})
+        self.device.setEnabled(not active)
+        self.refresh.setEnabled(not active)
         self._update_editor_access()
-        self.orb.set_active(running)
-        if running:
+        self.orb.set_active(recording)
+        if not recording:
+            self.set_level(0)
+        self._refresh_recording_tooltips()
+        if recording:
             self.set_page_status("正在录音", "live")
+        elif paused:
+            self.set_page_status("录音已暂停 · 可继续或停止", "warning")
+        elif state == "stopping":
+            self.set_page_status("正在停止并等待最后结果…", "warning")
         else:
             has_text = bool(self.transcript.toPlainText())
             self.set_page_status(
@@ -474,8 +509,30 @@ class RealtimePage(Page):
                 "success" if has_text else "idle",
             )
 
+    def set_shortcut_hints(self, toggle: str = "", stop: str = "") -> None:
+        self._toggle_shortcut_hint = toggle
+        self._stop_shortcut_hint = stop
+        self._refresh_recording_tooltips()
+
+    def _refresh_recording_tooltips(self) -> None:
+        if self._recording_state == "recording":
+            action = "暂停录音"
+        elif self._recording_state == "paused":
+            action = "继续录音"
+        else:
+            action = "开始录音"
+        toggle_suffix = (
+            f"（{self._toggle_shortcut_hint}）" if self._toggle_shortcut_hint else ""
+        )
+        stop_suffix = f"（{self._stop_shortcut_hint}）" if self._stop_shortcut_hint else ""
+        self.start.setToolTip(f"{action}{toggle_suffix}")
+        self.start.setAccessibleName(action)
+        self.stop.setToolTip(f"停止并完成{stop_suffix}")
+        self.stop.setAccessibleName("停止并完成")
+
     def set_level(self, level: float) -> None:
-        self.level.setValue(int(level * 100))
+        value = int(level * 100) if self._recording_state == "recording" else 0
+        self.level.setValue(value)
 
     def reset_pipeline(self) -> None:
         self._stage_texts = {stage: "" for stage, _ in PIPELINE_STAGES}
@@ -1086,9 +1143,78 @@ class SettingsPage(Page):
         self.chunk.setSuffix(" 分钟")
         self.chunk.setValue(max(1, min(10, round(config.chunk_seconds / 60))))
         self.chunk.setToolTip("文件转写时每个音频切片的目标时长，相邻切片固定重叠 10 秒")
-        local_layout.addWidget(_settings_field("切片长度", self.chunk))
+        self.history_limit = NoWheelSpinBox()
+        self.history_limit.setRange(10, 600)
+        self.history_limit.setSuffix(" 条")
+        self.history_limit.setValue(max(10, min(600, config.history_limit)))
+        self.history_limit.setToolTip(
+            "超过上限后自动清理最旧记录及任务文件；主页累计统计保持不变"
+        )
+        retention_row = QHBoxLayout()
+        retention_row.setContentsMargins(0, 0, 0, 0)
+        retention_row.setSpacing(12)
+        retention_row.addWidget(_settings_field("切片长度", self.chunk), 1)
+        retention_row.addWidget(
+            _settings_field("历史保留", self.history_limit), 1
+        )
+        local_layout.addLayout(retention_row)
+        local_layout.addWidget(
+            _label(
+                "超出上限时清理最旧记录与任务文件，主页累计统计继续保留",
+                "cardCaption",
+            )
+        )
         local_layout.addStretch(1)
         columns.addWidget(local)
+
+        shortcuts = Card("settingsCard")
+        shortcut_layout = QVBoxLayout(shortcuts)
+        shortcut_layout.setContentsMargins(20, 18, 20, 18)
+        shortcut_layout.setSpacing(11)
+        shortcut_layout.addWidget(_label("实时录音快捷键", "cardTitle"))
+        shortcut_layout.addWidget(
+            _label("仅在实时录音页生效；编辑文稿时会自动避让", "cardCaption")
+        )
+        self.toggle_shortcut = QKeySequenceEdit(
+            QKeySequence(config.realtime_toggle_shortcut)
+        )
+        self.toggle_shortcut.setObjectName("shortcutEdit")
+        self.toggle_shortcut.setMaximumSequenceLength(1)
+        self.toggle_shortcut.setClearButtonEnabled(True)
+        self.toggle_shortcut_enabled = QCheckBox("启用")
+        self.toggle_shortcut_enabled.setChecked(
+            config.realtime_toggle_shortcut_enabled
+        )
+        self.stop_shortcut = QKeySequenceEdit(
+            QKeySequence(config.realtime_stop_shortcut)
+        )
+        self.stop_shortcut.setObjectName("shortcutEdit")
+        self.stop_shortcut.setMaximumSequenceLength(1)
+        self.stop_shortcut.setClearButtonEnabled(True)
+        self.stop_shortcut_enabled = QCheckBox("启用")
+        self.stop_shortcut_enabled.setChecked(config.realtime_stop_shortcut_enabled)
+
+        shortcut_row = QHBoxLayout()
+        shortcut_row.setContentsMargins(0, 0, 0, 0)
+        shortcut_row.setSpacing(12)
+        shortcut_row.addWidget(
+            _settings_field(
+                "开始 / 暂停",
+                self._shortcut_control(
+                    self.toggle_shortcut, self.toggle_shortcut_enabled
+                ),
+            ),
+            1,
+        )
+        shortcut_row.addWidget(
+            _settings_field(
+                "停止并完成",
+                self._shortcut_control(self.stop_shortcut, self.stop_shortcut_enabled),
+            ),
+            1,
+        )
+        shortcut_layout.addLayout(shortcut_row)
+        columns.addWidget(shortcuts)
         content_layout.addLayout(columns)
         content_layout.addStretch(1)
         self.scroll.setWidget(content)
@@ -1102,6 +1228,12 @@ class SettingsPage(Page):
         self.apply_scenario.clicked.connect(self._apply_scenario)
         self.delete_scenario.clicked.connect(self._delete_scenario)
         self.scenario.currentIndexChanged.connect(self._scenario_selection_changed)
+        self.toggle_shortcut_enabled.toggled.connect(
+            self.toggle_shortcut.setEnabled
+        )
+        self.stop_shortcut_enabled.toggled.connect(self.stop_shortcut.setEnabled)
+        self.toggle_shortcut.setEnabled(self.toggle_shortcut_enabled.isChecked())
+        self.stop_shortcut.setEnabled(self.stop_shortcut_enabled.isChecked())
         self.transcription_prompt.textChanged.connect(
             self._limit_transcription_prompt
         )
@@ -1120,6 +1252,11 @@ class SettingsPage(Page):
             self.polish_prompt.textChanged,
             self.ffmpeg.textChanged,
             self.chunk.valueChanged,
+            self.history_limit.valueChanged,
+            self.toggle_shortcut.keySequenceChanged,
+            self.toggle_shortcut_enabled.toggled,
+            self.stop_shortcut.keySequenceChanged,
+            self.stop_shortcut_enabled.toggled,
         ):
             signal.connect(self._queue_auto_save)
         self.data_dir.editingFinished.connect(self._queue_auto_save)
@@ -1144,6 +1281,15 @@ class SettingsPage(Page):
             data_dir=self.data_dir.text().strip(),
             ffmpeg_path=self.ffmpeg.text().strip(),
             chunk_seconds=self.chunk.value() * 60,
+            history_limit=self.history_limit.value(),
+            realtime_toggle_shortcut=self.toggle_shortcut.keySequence().toString(
+                QKeySequence.SequenceFormat.PortableText
+            ),
+            realtime_toggle_shortcut_enabled=self.toggle_shortcut_enabled.isChecked(),
+            realtime_stop_shortcut=self.stop_shortcut.keySequence().toString(
+                QKeySequence.SequenceFormat.PortableText
+            ),
+            realtime_stop_shortcut_enabled=self.stop_shortcut_enabled.isChecked(),
             remember_key=self.remember.isChecked(),
         )
 
@@ -1169,8 +1315,35 @@ class SettingsPage(Page):
             self.chunk.setValue(
                 max(1, min(10, round(config.chunk_seconds / 60)))
             )
+            self.history_limit.setValue(
+                max(10, min(600, config.history_limit))
+            )
+            self.toggle_shortcut.setKeySequence(
+                QKeySequence(config.realtime_toggle_shortcut)
+            )
+            self.toggle_shortcut_enabled.setChecked(
+                config.realtime_toggle_shortcut_enabled
+            )
+            self.stop_shortcut.setKeySequence(
+                QKeySequence(config.realtime_stop_shortcut)
+            )
+            self.stop_shortcut_enabled.setChecked(
+                config.realtime_stop_shortcut_enabled
+            )
         finally:
             self._auto_save_suspended = False
+
+    @staticmethod
+    def _shortcut_control(
+        editor: QKeySequenceEdit, enabled: QCheckBox
+    ) -> QWidget:
+        control = QWidget()
+        layout = QHBoxLayout(control)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        layout.addWidget(editor, 1)
+        layout.addWidget(enabled)
+        return control
 
     def _queue_auto_save(self, *_args: object) -> None:
         if self._auto_save_suspended:

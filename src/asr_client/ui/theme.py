@@ -369,6 +369,14 @@ QPushButton#primaryIconButton {
     border-color: #f05b3a;
 }
 QPushButton#primaryIconButton:hover { background: #ff6a46; border-color: #ff6a46; }
+QPushButton#primaryIconButton[mode="pause"] {
+    background: #252d33;
+    border-color: #252d33;
+}
+QPushButton#primaryIconButton[mode="pause"]:hover {
+    background: #343e46;
+    border-color: #343e46;
+}
 QPushButton#dangerIconButton { background: #fff3ef; border-color: #e8b6aa; }
 QPushButton#dangerIconButton:hover { background: #ffe4dc; border-color: #d98270; }
 QPushButton#iconButton:disabled, QPushButton#primaryIconButton:disabled,
@@ -433,7 +441,7 @@ QLabel#pipelineArrow {
     font-size: 16px;
 }
 
-QLineEdit, QComboBox, QSpinBox {
+QLineEdit, QComboBox, QSpinBox, QKeySequenceEdit {
     min-height: 24px;
     color: #252c32;
     background: #f9f8f3;
@@ -442,12 +450,15 @@ QLineEdit, QComboBox, QSpinBox {
     padding: 7px 10px;
     selection-background-color: #f05b3a;
 }
-QLineEdit:hover, QComboBox:hover, QSpinBox:hover { border-color: #b9b4aa; }
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus {
+QLineEdit:hover, QComboBox:hover, QSpinBox:hover,
+QKeySequenceEdit:hover { border-color: #b9b4aa; }
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus,
+QKeySequenceEdit:focus {
     background: #fffefa;
     border: 1px solid #f05b3a;
 }
-QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled {
+QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled,
+QKeySequenceEdit:disabled {
     color: #a1a6aa; background: #eeece7; border-color: #e2dfd8;
 }
 QComboBox::drop-down { border: 0; width: 28px; }

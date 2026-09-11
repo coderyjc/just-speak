@@ -517,9 +517,34 @@ class Database:
         with self._lock:
             return list(
                 self._connection.execute(
-                    "SELECT * FROM sessions ORDER BY created_at DESC"
+                    "SELECT * FROM sessions ORDER BY created_at DESC, id DESC"
                 ).fetchall()
             )
+
+    def prune_sessions(
+        self, max_count: int, protected_ids: set[str] | None = None
+    ) -> list[sqlite3.Row]:
+        """Remove the oldest history rows while retaining cumulative usage data."""
+
+        limit = max(0, int(max_count))
+        protected = {str(value) for value in (protected_ids or set()) if value}
+        with self.transaction() as db:
+            rows = list(
+                db.execute(
+                    "SELECT * FROM sessions ORDER BY created_at DESC, id DESC"
+                ).fetchall()
+            )
+            remove_count = max(0, len(rows) - limit)
+            victims = [
+                row
+                for row in reversed(rows)
+                if str(row["id"]) not in protected
+            ][:remove_count]
+            db.executemany(
+                "DELETE FROM sessions WHERE id=?",
+                ((str(row["id"]),) for row in victims),
+            )
+        return victims
 
     def _ensure_usage_entry(self, session_id: str) -> None:
         with self.transaction() as db:

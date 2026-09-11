@@ -1,21 +1,24 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
     QHBoxLayout,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -40,6 +43,7 @@ from asr_client.ui.widgets import ThemedSizeGrip, WindowTitleBar
 
 
 BEIJING_TIMEZONE = timezone(timedelta(hours=8))
+logger = logging.getLogger(__name__)
 
 
 def _format_history_time(value: object) -> str:
@@ -90,6 +94,8 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(672, 455)
         self._build_ui()
         self._connect()
+        self._build_realtime_shortcuts()
+        self._enforce_history_limit()
         self.refresh_microphones()
         self.refresh_history()
         self.refresh_home()
@@ -157,7 +163,7 @@ class MainWindow(QMainWindow):
     def _connect(self) -> None:
         self.navigation.currentRowChanged.connect(self._switch_page)
         self.realtime_page.refresh.clicked.connect(self.refresh_microphones)
-        self.realtime_page.start_requested.connect(self.start_realtime)
+        self.realtime_page.start_requested.connect(self.toggle_realtime)
         self.realtime_page.stop_requested.connect(self.stop_realtime)
         self.realtime_page.export_requested.connect(
             lambda: self._export_text(
@@ -197,6 +203,87 @@ class MainWindow(QMainWindow):
         self.bridge.extracted.connect(
             lambda path: QMessageBox.information(self, "提取完成", f"音频已保存到：\n{path}")
         )
+
+    def _build_realtime_shortcuts(self) -> None:
+        self._realtime_toggle_sequence = QKeySequence()
+        self._realtime_stop_sequence = QKeySequence()
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+        self._apply_realtime_shortcuts()
+
+    @staticmethod
+    def _shortcut_label(sequence: QKeySequence) -> str:
+        portable = sequence.toString(QKeySequence.SequenceFormat.PortableText)
+        if portable == "Space":
+            return "空格"
+        return sequence.toString(QKeySequence.SequenceFormat.NativeText)
+
+    @staticmethod
+    def _shortcut_conflict(config: AppConfig) -> bool:
+        if not (
+            config.realtime_toggle_shortcut_enabled
+            and config.realtime_stop_shortcut_enabled
+        ):
+            return False
+        toggle = QKeySequence(config.realtime_toggle_shortcut)
+        stop = QKeySequence(config.realtime_stop_shortcut)
+        return not toggle.isEmpty() and toggle == stop
+
+    def _apply_realtime_shortcuts(self) -> None:
+        toggle = QKeySequence(self.config.realtime_toggle_shortcut)
+        stop = QKeySequence(self.config.realtime_stop_shortcut)
+        toggle_enabled = (
+            self.config.realtime_toggle_shortcut_enabled and not toggle.isEmpty()
+        )
+        stop_enabled = self.config.realtime_stop_shortcut_enabled and not stop.isEmpty()
+        if toggle_enabled and stop_enabled and toggle == stop:
+            stop_enabled = False
+        self._realtime_toggle_sequence = toggle if toggle_enabled else QKeySequence()
+        self._realtime_stop_sequence = stop if stop_enabled else QKeySequence()
+        self.realtime_page.set_shortcut_hints(
+            self._shortcut_label(toggle) if toggle_enabled else "",
+            self._shortcut_label(stop) if stop_enabled else "",
+        )
+
+    def _realtime_shortcut_allowed(self) -> bool:
+        if self.pages.currentWidget() is not self.realtime_page:
+            return False
+        focused = QApplication.focusWidget()
+        if isinstance(focused, (QLineEdit, QPlainTextEdit)) and not focused.isReadOnly():
+            return False
+        return True
+
+    def _handle_realtime_toggle_shortcut(self) -> None:
+        if self._realtime_shortcut_allowed():
+            self.toggle_realtime()
+
+    def _handle_realtime_stop_shortcut(self) -> None:
+        if self._realtime_shortcut_allowed() and self._realtime_job is not None:
+            self.stop_realtime()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
+        if event.type() != QEvent.Type.KeyPress or not self._realtime_shortcut_allowed():
+            return super().eventFilter(watched, event)
+        focused = QApplication.focusWidget()
+        if focused is not None and focused.window() is not self:
+            return super().eventFilter(watched, event)
+        key_combination = getattr(event, "keyCombination", lambda: None)()
+        if key_combination is None:
+            return super().eventFilter(watched, event)
+        pressed = QKeySequence(key_combination)
+        if not self._realtime_stop_sequence.isEmpty() and pressed == self._realtime_stop_sequence:
+            if not getattr(event, "isAutoRepeat", lambda: False)():
+                self._handle_realtime_stop_shortcut()
+            return True
+        if (
+            not self._realtime_toggle_sequence.isEmpty()
+            and pressed == self._realtime_toggle_sequence
+        ):
+            if not getattr(event, "isAutoRepeat", lambda: False)():
+                self._handle_realtime_toggle_shortcut()
+            return True
+        return super().eventFilter(watched, event)
 
     def _switch_page(self, index: int) -> None:
         if index < 0 or index >= self.pages.count():
@@ -255,10 +342,20 @@ class MainWindow(QMainWindow):
                 self.realtime_page.device.addItem("未发现输入设备", None)
                 self.realtime_page.start.setEnabled(False)
                 self.realtime_page.set_page_status("无输入设备", "danger")
+            else:
+                self.realtime_page.start.setEnabled(self._realtime_job is None)
         except Exception as exc:
             self.realtime_page.device.addItem(f"无法枚举麦克风：{exc}", None)
             self.realtime_page.start.setEnabled(False)
             self.realtime_page.set_page_status("设备不可用", "danger")
+
+    def toggle_realtime(self) -> None:
+        if self._realtime_job is None:
+            self.start_realtime()
+        elif self._realtime_job.is_paused:
+            self.resume_realtime()
+        elif not self._realtime_job.is_stopping:
+            self.pause_realtime()
 
     def start_realtime(self) -> None:
         if self._realtime_job is not None:
@@ -299,6 +396,9 @@ class MainWindow(QMainWindow):
             self._realtime_job = None
             return
         self._realtime_session_id = self._realtime_job.session_id
+        pruned, _ = self._enforce_history_limit()
+        if pruned:
+            self.refresh_history()
         self.refresh_home()
         self.realtime_page.reset_pipeline()
         self.realtime_page.set_running(True)
@@ -307,11 +407,18 @@ class MainWindow(QMainWindow):
         )
         self._realtime_thread.start()
 
+    def pause_realtime(self) -> None:
+        if self._realtime_job and self._realtime_job.pause():
+            self.realtime_page.set_recording_state("paused")
+
+    def resume_realtime(self) -> None:
+        if self._realtime_job and self._realtime_job.resume():
+            self.realtime_page.set_recording_state("recording")
+
     def stop_realtime(self) -> None:
-        if self._realtime_job:
-            self.realtime_page.set_page_status("正在停止并等待最后结果…", "warning")
+        if self._realtime_job and not self._realtime_job.is_stopping:
+            self.realtime_page.set_recording_state("stopping")
             self._realtime_job.stop()
-            self.realtime_page.stop.setEnabled(False)
 
     def inspect_media(self, path: str) -> None:
         if not path:
@@ -355,6 +462,9 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "无法创建任务", str(exc))
             return
         self._file_session_id = self._file_job.session_id
+        pruned, _ = self._enforce_history_limit()
+        if pruned:
+            self.refresh_history()
         self.refresh_home()
         self.file_page.transcript.clear()
         self.file_page.progress.setValue(0)
@@ -405,6 +515,13 @@ class MainWindow(QMainWindow):
         if update.kind == "meter":
             self.realtime_page.duration.setText(self._format_duration(update.message))
             self.realtime_page.set_level(float(update.payload or 0))
+            return
+        if update.kind == "recording_state" and source == "realtime":
+            state = str(update.payload or "recording")
+            self.realtime_page.set_recording_state(state)
+            self.realtime_page.set_page_status(
+                update.message, "warning" if state == "paused" else "live"
+            )
             return
         if update.kind == "network":
             if "已连接" in update.message:
@@ -474,6 +591,7 @@ class MainWindow(QMainWindow):
                     self.file_page.transcript.setReadOnly(True)
                     self.file_page.save_edit.setVisible(False)
                 self._file_job = None
+            self._enforce_history_limit()
             self.refresh_history()
             self.refresh_home()
 
@@ -490,6 +608,11 @@ class MainWindow(QMainWindow):
         return f"{minutes:02d}:{seconds:04.1f}"
 
     def save_settings(self, config: AppConfig, api_key: str) -> None:
+        if self._shortcut_conflict(config):
+            self.settings_page.set_page_status(
+                "自动保存暂停 · 两项实时录音快捷键不能相同", "danger"
+            )
+            return
         if not config.data_dir:
             self.settings_page.set_page_status(
                 "自动保存暂停 · 请选择可写的数据目录", "danger"
@@ -520,11 +643,20 @@ class MainWindow(QMainWindow):
                 self.database = Database(target_database)
                 old_database.close()
             self.config = config
-            if moving_database:
+            self._apply_realtime_shortcuts()
+            pruned, residual_dirs = self._enforce_history_limit()
+            if moving_database or pruned:
                 self.refresh_history()
                 self.refresh_home()
+            status_parts = ["已自动保存"]
+            if pruned:
+                status_parts.append(f"已清理 {pruned} 条旧记录")
+            if residual_dirs:
+                status_parts.append(f"{residual_dirs} 个任务目录需手动清理")
+            status_parts.append(datetime.now().strftime("%H:%M:%S"))
             self.settings_page.set_page_status(
-                f"已自动保存 · {datetime.now().strftime('%H:%M:%S')}", "success"
+                " · ".join(status_parts),
+                "warning" if residual_dirs else "success",
             )
         except Exception as exc:
             self.settings_page.set_page_status(f"自动保存失败 · {exc}", "danger")
@@ -583,6 +715,45 @@ class MainWindow(QMainWindow):
             f"{len(rows)} 项记录" if rows else "暂无记录",
             "success" if rows else "idle",
         )
+
+    def _enforce_history_limit(self) -> tuple[int, int]:
+        protected_ids: set[str] = set()
+        if self._realtime_job is not None and self._realtime_session_id:
+            protected_ids.add(self._realtime_session_id)
+        if self._file_job is not None and self._file_session_id:
+            protected_ids.add(self._file_session_id)
+        victims = self.database.prune_sessions(
+            self.config.history_limit, protected_ids
+        )
+        residual_dirs = 0
+        for row in victims:
+            session_id = str(row["id"])
+            task_dir_value = str(row["task_dir"] or "").strip()
+            if task_dir_value:
+                task_dir = Path(task_dir_value)
+                try:
+                    if task_dir.exists():
+                        resolved = task_dir.resolve()
+                        if (
+                            resolved.name != session_id
+                            or resolved.parent.name != "tasks"
+                        ):
+                            raise RuntimeError("任务目录校验失败")
+                        shutil.rmtree(resolved)
+                except (OSError, RuntimeError) as exc:
+                    residual_dirs += 1
+                    logger.warning(
+                        "历史记录已清理，任务目录保留：%s (%s)",
+                        task_dir,
+                        exc,
+                    )
+            if self._realtime_session_id == session_id:
+                self._realtime_session_id = ""
+            if self._file_session_id == session_id:
+                self._file_session_id = ""
+        if victims:
+            self.history_page.clear_detail()
+        return len(victims), residual_dirs
 
     def refresh_home(self) -> None:
         self.home_page.set_statistics(self.database.usage_statistics())
@@ -833,6 +1004,9 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "导出失败", str(exc))
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
         if self._realtime_job:
             self._realtime_job.stop()
         if self._file_job:

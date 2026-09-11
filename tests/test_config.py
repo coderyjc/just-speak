@@ -36,7 +36,13 @@ def test_model_protocol_capabilities() -> None:
 def test_config_round_trip_contains_no_secret(tmp_path) -> None:
     store = ConfigStore(tmp_path / "config.json")
     config = AppConfig(
-        data_dir=str(tmp_path), chunk_seconds=99999, remember_key=True
+        data_dir=str(tmp_path),
+        chunk_seconds=99999,
+        history_limit=99999,
+        realtime_toggle_shortcut="Ctrl+Space",
+        realtime_toggle_shortcut_enabled=False,
+        realtime_stop_shortcut="F8",
+        remember_key=True,
     )
     store.save(config)
     raw = json.loads(store.path.read_text(encoding="utf-8"))
@@ -44,6 +50,10 @@ def test_config_round_trip_contains_no_secret(tmp_path) -> None:
     assert raw["_schema_version"] == 2
     loaded = store.load()
     assert loaded.chunk_seconds == 10 * 60
+    assert loaded.history_limit == 600
+    assert loaded.realtime_toggle_shortcut == "Ctrl+Space"
+    assert loaded.realtime_toggle_shortcut_enabled is False
+    assert loaded.realtime_stop_shortcut == "F8"
     assert loaded.remember_key is True
 
 
@@ -75,6 +85,16 @@ def test_legacy_second_based_chunk_value_is_migrated_and_capped(tmp_path) -> Non
     path.write_text(json.dumps({"chunk_seconds": 60}), encoding="utf-8")
     loaded = ConfigStore(path).load()
     assert loaded.chunk_seconds == 10 * 60
+
+
+def test_history_limit_defaults_and_is_clamped(tmp_path) -> None:
+    default_path = tmp_path / "default.json"
+    default_path.write_text("{}", encoding="utf-8")
+    assert ConfigStore(default_path).load().history_limit == 50
+
+    minimum_path = tmp_path / "minimum.json"
+    minimum_path.write_text(json.dumps({"history_limit": 1}), encoding="utf-8")
+    assert ConfigStore(minimum_path).load().history_limit == 10
 
 
 def test_scenarios_save_apply_replace_and_delete(tmp_path) -> None:

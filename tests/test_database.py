@@ -58,6 +58,41 @@ def test_database_backup_preserves_history(tmp_path) -> None:
     source.close()
 
 
+def test_prune_sessions_keeps_limit_and_cumulative_statistics(tmp_path) -> None:
+    db = Database(tmp_path / "test.sqlite3")
+    base_time = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    session_ids = []
+    for index in range(12):
+        session_id = db.create_session(
+            "realtime", f"record-{index}", tmp_path / "tasks" / f"record-{index}", {}
+        )
+        session_ids.append(session_id)
+        db.save_edited_text(session_id, f"第{index}条", track_usage=True)
+        occurred_at = (base_time + timedelta(days=index)).isoformat(timespec="seconds")
+        with db.transaction() as connection:
+            connection.execute(
+                "UPDATE sessions SET created_at=? WHERE id=?",
+                (occurred_at, session_id),
+            )
+            connection.execute(
+                "UPDATE usage_ledger SET occurred_at=? WHERE session_id=?",
+                (occurred_at, session_id),
+            )
+
+    stats_before = db.usage_statistics(
+        datetime(2026, 9, 20, tzinfo=timezone.utc)
+    )
+    victims = db.prune_sessions(10, {session_ids[0]})
+
+    assert len(victims) == 2
+    assert db.get_session(session_ids[0]) is not None
+    assert len(db.list_sessions()) == 10
+    assert db.usage_statistics(
+        datetime(2026, 9, 20, tzinfo=timezone.utc)
+    ) == stats_before
+    db.close()
+
+
 def test_usage_statistics_uses_final_text_and_non_overlapping_duration(tmp_path) -> None:
     db = Database(tmp_path / "test.sqlite3")
     cst = timezone(timedelta(hours=8))

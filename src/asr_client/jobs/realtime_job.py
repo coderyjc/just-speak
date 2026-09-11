@@ -60,6 +60,9 @@ class RealtimeJob:
         self.text_provider = text_provider
         self.text_stage_timeout = max(0.1, float(text_stage_timeout))
         self._stop_requested = threading.Event()
+        self._paused = threading.Event()
+        self._stream_restart_requested = threading.Event()
+        self._state_lock = threading.Lock()
         self._capture_done = threading.Event()
         self._writer_done = threading.Event()
         self._fatal = threading.Event()
@@ -98,6 +101,37 @@ class RealtimeJob:
         with self._condition:
             self._condition.notify_all()
 
+    @property
+    def is_paused(self) -> bool:
+        return self._paused.is_set()
+
+    @property
+    def is_stopping(self) -> bool:
+        return self._stop_requested.is_set()
+
+    def pause(self) -> bool:
+        with self._state_lock:
+            if self._stop_requested.is_set() or self._paused.is_set():
+                return False
+            self._paused.set()
+            self._stream_restart_requested.set()
+        self.update(JobUpdate("recording_state", "录音已暂停", payload="paused"))
+        with self._condition:
+            self._condition.notify_all()
+        return True
+
+    def resume(self) -> bool:
+        with self._state_lock:
+            if self._stop_requested.is_set() or not self._paused.is_set():
+                return False
+            self._paused.clear()
+        self.update(
+            JobUpdate("recording_state", "继续录音 · 正在建立新的云端连接", payload="recording")
+        )
+        with self._condition:
+            self._condition.notify_all()
+        return True
+
     def run(self) -> None:
         self.database.set_session_status(self.session_id, SessionStatus.RUNNING)
         self.update(JobUpdate("started", "正在打开麦克风", payload=self.session_id))
@@ -132,6 +166,12 @@ class RealtimeJob:
         self._input_rate = input_rate
 
         def callback(indata: object, frames: int, time_info: object, status: object) -> None:
+            if (
+                self._paused.is_set()
+                or self._stream_restart_requested.is_set()
+                or self._stop_requested.is_set()
+            ):
+                return
             if status and getattr(status, "input_overflow", False):
                 self._fail_local("麦克风输入发生溢出，录音已停止")
                 return
@@ -140,22 +180,30 @@ class RealtimeJob:
             except queue.Full:
                 self._fail_local("录音队列已满，录音已停止以防止静默丢帧")
 
-        self.update(JobUpdate("status", f"录音中 · 输入 {input_rate} Hz"))
-        with sd.RawInputStream(
-            samplerate=input_rate,
-            blocksize=blocksize,
-            device=device,
-            channels=1,
-            dtype="int16",
-            callback=callback,
-        ):
-            while not self._stop_requested.wait(0.1):
-                if self._fatal.is_set():
-                    if self._stream is not None:
-                        self._invalidate_callback()
-                        self._stream.abort()
-                        self._stream = None
-                    break
+        while not self._stop_requested.is_set() and not self._fatal.is_set():
+            if self._paused.is_set() or self._stream_restart_requested.is_set():
+                self._stop_requested.wait(0.05)
+                continue
+            self.update(JobUpdate("status", f"录音中 · 输入 {input_rate} Hz"))
+            with sd.RawInputStream(
+                samplerate=input_rate,
+                blocksize=blocksize,
+                device=device,
+                channels=1,
+                dtype="int16",
+                callback=callback,
+            ):
+                while not self._stop_requested.wait(0.05):
+                    if (
+                        self._paused.is_set()
+                        or self._stream_restart_requested.is_set()
+                        or self._fatal.is_set()
+                    ):
+                        break
+        if self._fatal.is_set() and self._stream is not None:
+            self._invalidate_callback()
+            self._stream.abort()
+            self._stream = None
 
     @staticmethod
     def _select_input_rate(sd: object, device: int | None) -> int:
@@ -232,12 +280,48 @@ class RealtimeJob:
                 with self._condition:
                     self._condition.wait_for(
                         lambda: self._durable_samples - cursor >= 1600
+                        or self._stream_restart_requested.is_set()
                         or self._writer_done.is_set()
                         or self._fatal.is_set(),
                         timeout=0.5,
                     )
                     durable = self._durable_samples
                 if self._fatal.is_set():
+                    break
+                restart_stream = self._stream_restart_requested.is_set()
+                if restart_stream and offline_permanently and cursor < durable:
+                    self._add_gap(max(stream_origin, self._confirmed_samples), durable)
+                    cursor = durable
+                if restart_stream and cursor >= durable:
+                    self._close_cloud_span(stream_origin, durable, deliberate=True)
+                    stream_origin = cursor
+                    self._stream_restart_requested.clear()
+                    with self._condition:
+                        self._condition.notify_all()
+                    if self._paused.is_set() and not self._writer_done.is_set():
+                        self.update(JobUpdate("network", "云端流已暂停"))
+                    elif not self._writer_done.is_set():
+                        self.update(JobUpdate("network", "正在建立新的云端连接"))
+                    continue
+                if (
+                    self._paused.is_set()
+                    and not restart_stream
+                    and not self._writer_done.is_set()
+                ):
+                    with self._condition:
+                        self._condition.wait_for(
+                            lambda: not self._paused.is_set()
+                            or self._stop_requested.is_set()
+                            or self._writer_done.is_set()
+                            or self._fatal.is_set(),
+                            timeout=0.5,
+                        )
+                    continue
+                if (
+                    self._writer_done.is_set()
+                    and cursor >= durable
+                    and self._stream is None
+                ):
                     break
                 if offline_permanently:
                     if self._writer_done.is_set():
@@ -315,13 +399,27 @@ class RealtimeJob:
                             self.update(JobUpdate("network", f"云端连接中断：{exc}"))
                             continue
                 if self._writer_done.is_set() and cursor >= durable:
-                    if self._stream is not None:
-                        if not self._stop_cloud_with_timeout():
-                            self._add_gap(max(stream_origin, self._confirmed_samples), durable)
-                        elif self._current_stream_had_text and not self._current_stream_had_timed_final:
-                            self._add_gap(stream_origin, durable)
-                        self._stream = None
+                    self._close_cloud_span(stream_origin, durable)
                     break
+
+    def _close_cloud_span(
+        self, stream_origin: int, end_sample: int, deliberate: bool = False
+    ) -> None:
+        stream = self._stream
+        if stream is None:
+            return
+        clean = self._stop_cloud_with_timeout(mark_incomplete=not deliberate)
+        if not clean:
+            self._add_gap(max(stream_origin, self._confirmed_samples), end_sample)
+        elif self._current_stream_had_text and not self._current_stream_had_timed_final:
+            self._add_gap(stream_origin, end_sample)
+        self._invalidate_callback()
+        if not clean:
+            try:
+                stream.abort()
+            except Exception:
+                pass
+        self._stream = None
 
     def _start_cloud_stream(self, origin: int) -> None:
         run_id = uuid.uuid4().hex
@@ -385,7 +483,7 @@ class RealtimeJob:
         )
         return "\n".join(parts)
 
-    def _stop_cloud_with_timeout(self) -> bool:
+    def _stop_cloud_with_timeout(self, mark_incomplete: bool = True) -> bool:
         stream = self._stream
         if stream is None:
             return True
@@ -403,7 +501,8 @@ class RealtimeJob:
         worker = threading.Thread(target=finish, name="asr-stop", daemon=True)
         worker.start()
         if not finished.wait(self.stop_timeout):
-            self._cloud_stop_timed_out = True
+            if mark_incomplete:
+                self._cloud_stop_timed_out = True
             self.update(JobUpdate("network", "云端结束等待超时，尾部将补转写"))
             return False
         if error:

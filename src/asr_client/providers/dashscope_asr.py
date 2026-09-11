@@ -87,8 +87,15 @@ def _plain(value: Any) -> Any:
 def _error_from(value: Any) -> AsrError:
     message = str(getattr(value, "message", None) or value or "云端识别失败")
     request_id = str(getattr(value, "request_id", "") or "")
-    lowered = message.lower()
-    if any(word in lowered for word in ("invalid api", "invalidapikey", "unauthorized", "401", "authentication", "accessdenied")):
+    code = str(getattr(value, "code", "") or "")
+    lowered = f"{code} {message}".lower()
+    if "no_input_audio_error" in lowered:
+        message = (
+            "云端未检测到有效语音（NO_INPUT_AUDIO_ERROR）。请确认音频包含人声，"
+            "并将语言设置为与音频一致；不确定时请选择“自动识别”。"
+        )
+        kind = ErrorKind.CONFIGURATION
+    elif any(word in lowered for word in ("invalid api", "invalidapikey", "unauthorized", "401", "authentication", "accessdenied")):
         kind = ErrorKind.AUTHENTICATION
     elif any(word in lowered for word in ("quota", "quotaexceeded", "balance", "insufficient", "billing")):
         kind = ErrorKind.QUOTA

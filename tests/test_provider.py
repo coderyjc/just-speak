@@ -5,13 +5,14 @@ from asr_client.providers.dashscope_asr import (
     DashScopeAsrProvider,
     _context_messages,
     _events_from_result,
+    _error_from,
     _http_base_url,
     _model_mode,
     _multimodal_messages,
     _text_from_http_result,
     _websocket_url,
 )
-from asr_client.providers.base import AsrError
+from asr_client.providers.base import AsrError, ErrorKind
 
 
 class Result:
@@ -32,6 +33,19 @@ def test_dashscope_result_timestamps_become_samples() -> None:
 
 def test_retry_after_hint_is_respected() -> None:
     assert AsrError("rate limited; retry-after: 7.5 seconds").retry_delay(2) == 7.5
+
+
+def test_no_input_audio_error_stops_retries_with_actionable_hint() -> None:
+    class Response:
+        code = "NO_INPUT_AUDIO_ERROR"
+        message = "No valid speech was detected"
+        request_id = "request-no-audio"
+
+    error = _error_from(Response())
+    assert error.kind == ErrorKind.CONFIGURATION
+    assert not error.retryable
+    assert error.request_id == "request-no-audio"
+    assert "自动识别" in str(error)
 
 
 def test_model_mode_selects_the_matching_dashscope_api() -> None:

@@ -16,6 +16,8 @@ KEYRING_ACCOUNT = "dashscope-api-key"
 CONFIG_SCHEMA_VERSION = 2
 MIN_CHUNK_SECONDS = 60
 MAX_CHUNK_SECONDS = 10 * 60
+MIN_HISTORY_LIMIT = 10
+MAX_HISTORY_LIMIT = 600
 SCENARIO_FIELDS = (
     "region",
     "workspace_id",
@@ -30,8 +32,19 @@ SCENARIO_FIELDS = (
 
 
 def _normalized_chunk_seconds(value: object) -> int:
-    seconds = round(int(value) / 60) * 60
+    try:
+        seconds = round(int(value) / 60) * 60
+    except (TypeError, ValueError):
+        seconds = AppConfig().chunk_seconds
     return max(MIN_CHUNK_SECONDS, min(MAX_CHUNK_SECONDS, seconds))
+
+
+def _normalized_history_limit(value: object) -> int:
+    try:
+        limit = int(value)
+    except (TypeError, ValueError):
+        limit = AppConfig().history_limit
+    return max(MIN_HISTORY_LIMIT, min(MAX_HISTORY_LIMIT, limit))
 
 
 def app_config_dir() -> Path:
@@ -74,6 +87,7 @@ class ConfigStore:
             if not loaded.data_dir:
                 loaded.data_dir = str(default_data_dir())
             loaded.chunk_seconds = _normalized_chunk_seconds(loaded.chunk_seconds)
+            loaded.history_limit = _normalized_history_limit(loaded.history_limit)
             return loaded
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             return config
@@ -83,6 +97,7 @@ class ConfigStore:
         payload = asdict(config)
         payload["_schema_version"] = CONFIG_SCHEMA_VERSION
         payload["chunk_seconds"] = _normalized_chunk_seconds(config.chunk_seconds)
+        payload["history_limit"] = _normalized_history_limit(config.history_limit)
         payload.pop("remember_key", None)
         payload["remember_key"] = bool(config.remember_key)
         temp = self.path.with_suffix(".tmp")

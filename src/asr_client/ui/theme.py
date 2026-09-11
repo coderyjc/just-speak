@@ -60,7 +60,8 @@ QPushButton#titleBarClose:pressed { background: #b63c30; padding: 0; }
 QSizeGrip#windowSizeGrip { background: transparent; }
 
 QScrollArea#settingsScroll, QScrollArea#settingsScroll > QWidget > QWidget,
-QWidget#settingsScrollContent {
+QWidget#settingsScrollContent, QScrollArea#dashboardScroll,
+QScrollArea#dashboardScroll > QWidget > QWidget, QWidget#dashboardContent {
     background: transparent;
     border: 0;
 }
@@ -159,7 +160,8 @@ QLabel#pageSubtitle {
 }
 
 QFrame#card, QFrame#heroCard, QFrame#settingsCard, QFrame#transcriptCard,
-QFrame#scenarioCard, QFrame#controlCard, QFrame#fileToolbar {
+QFrame#scenarioCard, QFrame#controlCard, QFrame#fileToolbar,
+QFrame#dashboardCard, QFrame#dashboardStats {
     background: #fffdf8;
     border: 1px solid #dedbd2;
     border-radius: 14px;
@@ -169,6 +171,77 @@ QFrame#heroCard {
     background: #20262c;
     border: 1px solid #2f373f;
 }
+
+QFrame#dashboardHero {
+    background: #20262c;
+    border: 1px solid #303840;
+    border-radius: 14px;
+}
+QLabel#dashboardHeroLabel {
+    color: #929ca5;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+QLabel#dashboardHeroValue {
+    color: #fffdf8;
+    font-family: "Bahnschrift SemiBold", "Microsoft YaHei UI";
+    font-size: 29px;
+    font-weight: 700;
+}
+QLabel#dashboardHeroUnit {
+    color: #ff7b5d;
+    padding-bottom: 4px;
+    font-size: 11px;
+    font-weight: 700;
+}
+QLabel#dashboardHeroMeta { color: #aeb6bd; font-size: 9px; }
+QFrame#dashboardHeroDivider { color: #3b444c; }
+QLabel#dashboardTypeLabel { color: #929ca5; font-size: 10px; }
+QLabel#dashboardTypeValue {
+    color: #fffdf8;
+    font-family: "Bahnschrift", "Microsoft YaHei UI";
+    font-size: 16px;
+    font-weight: 600;
+}
+QLabel#dashboardTypeMeta { color: #aeb6bd; font-size: 9px; }
+QLabel#dashboardRange { color: #8a918f; font-size: 9px; }
+QLabel#dashboardTokenBadge {
+    color: #9b3c28;
+    background: #ffe1d7;
+    border: 1px solid #f3c1b3;
+    border-radius: 7px;
+    padding: 2px 7px;
+    font-family: "Bahnschrift", "Microsoft YaHei UI";
+    font-size: 9px;
+    font-weight: 600;
+}
+QWidget#activityHeatmap {
+    background: transparent;
+    color: #858d93;
+    font-size: 9px;
+}
+QFrame#dashboardMetric {
+    background: #f7f4ed;
+    border: 1px solid #e4dfd5;
+    border-radius: 10px;
+}
+QFrame#dashboardMetric:hover {
+    background: #fffaf5;
+    border-color: #efc5b9;
+}
+QLabel#dashboardMetricLabel {
+    color: #7c858b;
+    font-size: 9px;
+    font-weight: 600;
+}
+QLabel#dashboardMetricValue {
+    color: #20272d;
+    font-family: "Bahnschrift SemiBold", "Microsoft YaHei UI";
+    font-size: 17px;
+    font-weight: 700;
+}
+QLabel#dashboardMetricDetail { color: #959b9f; font-size: 9px; }
 
 QFrame#scenarioCard {
     background: #20262c;

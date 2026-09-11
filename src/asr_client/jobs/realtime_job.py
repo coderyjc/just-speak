@@ -574,7 +574,9 @@ class RealtimeJob:
                         },
                     )
                 )
-                self.database.save_edited_text(self.session_id, current_text)
+                self.database.save_edited_text(
+                    self.session_id, current_text, track_usage=True
+                )
                 atomic_write_text(self.task_dir / "transcript.txt", current_text)
             except Exception as exc:
                 message = str(exc)
@@ -606,7 +608,9 @@ class RealtimeJob:
                         },
                     )
                 )
-        self.database.save_edited_text(self.session_id, current_text)
+        self.database.save_edited_text(
+            self.session_id, current_text, track_usage=True
+        )
         atomic_write_text(self.task_dir / "transcript.txt", current_text)
         return errors
 

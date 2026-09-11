@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from datetime import date, timedelta
 
 from PySide6.QtCore import (
     Property,
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSizeGrip,
+    QToolTip,
     QWidget,
 )
 
@@ -241,6 +243,116 @@ class RecordingDot(QLabel):
         else:
             self._blink.stop()
             self._effect.setOpacity(1.0)
+
+
+class ActivityHeatmap(QWidget):
+    """Compact rolling-year activity heatmap for daily transcript characters."""
+
+    _COLORS = ("#ebe8e0", "#ffd8ca", "#ffad94", "#f47759", "#c9472c")
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setObjectName("activityHeatmap")
+        self.setFixedHeight(112)
+        self.setMouseTracking(True)
+        self._daily: dict[date, int] = {}
+        self._end_date = date.today()
+        self._cells: list[tuple[QRectF, date, int]] = []
+
+    def set_data(self, values: dict[str, int], end_date: str = "") -> None:
+        parsed: dict[date, int] = {}
+        for key, value in values.items():
+            try:
+                parsed[date.fromisoformat(str(key))] = max(0, int(value))
+            except (TypeError, ValueError):
+                continue
+        self._daily = parsed
+        try:
+            self._end_date = date.fromisoformat(end_date) if end_date else date.today()
+        except ValueError:
+            self._end_date = date.today()
+        self.update()
+
+    def paintEvent(self, event: object) -> None:  # noqa: N802 - Qt API
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setFont(self.font())
+        start = self._end_date - timedelta(days=364)
+        grid_start = start - timedelta(days=start.weekday())
+        weeks = ((self._end_date - grid_start).days // 7) + 1
+        left = 23
+        top = 18
+        gap = 2
+        cell = max(5, min(9, (self.width() - left - 8 - gap * (weeks - 1)) // weeks))
+        maximum = max(
+            (
+                value
+                for current, value in self._daily.items()
+                if grid_start <= current <= self._end_date
+            ),
+            default=0,
+        )
+        self._cells = []
+
+        painter.setPen(QColor("#8b918f"))
+        for weekday, label in ((0, "一"), (2, "三"), (4, "五")):
+            painter.drawText(1, top + weekday * (cell + gap) + cell, label)
+
+        previous_month = -1
+        for week in range(weeks):
+            week_date = grid_start + timedelta(days=week * 7)
+            if week_date.month != previous_month:
+                painter.drawText(left + week * (cell + gap), 11, f"{week_date.month}月")
+                previous_month = week_date.month
+            for weekday in range(7):
+                current = week_date + timedelta(days=weekday)
+                count = self._daily.get(current, 0)
+                x = left + week * (cell + gap)
+                y = top + weekday * (cell + gap)
+                rect = QRectF(x, y, cell, cell)
+                if current > self._end_date:
+                    color = QColor("#f4f2ed")
+                else:
+                    color = QColor(self._COLORS[self._level(count, maximum)])
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(color)
+                painter.drawRoundedRect(rect, 1.7, 1.7)
+                self._cells.append((rect, current, count))
+
+        legend_y = top + 7 * (cell + gap) + 7
+        legend_x = max(left, self.width() - 91)
+        painter.setPen(QColor("#8b918f"))
+        painter.drawText(legend_x, legend_y + 7, "少")
+        for index, color in enumerate(self._COLORS[1:]):
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(color))
+            painter.drawRoundedRect(
+                QRectF(legend_x + 17 + index * 11, legend_y, 8, 8), 1.5, 1.5
+            )
+        painter.setPen(QColor("#8b918f"))
+        painter.drawText(legend_x + 64, legend_y + 7, "多")
+
+    @staticmethod
+    def _level(value: int, maximum: int) -> int:
+        if value <= 0 or maximum <= 0:
+            return 0
+        ratio = math.log1p(value) / math.log1p(maximum)
+        return min(4, max(1, math.ceil(ratio * 4)))
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt API
+        position = event.position()
+        for rect, current, count in self._cells:
+            if rect.contains(position):
+                message = f"{current.isoformat()} · {count:,} 字"
+                if count == 0:
+                    message = f"{current.isoformat()} · 无输入"
+                QToolTip.showText(event.globalPosition().toPoint(), message, self)
+                return
+        QToolTip.hideText()
+
+    def leaveEvent(self, event: object) -> None:  # noqa: N802 - Qt API
+        QToolTip.hideText()
+        super().leaveEvent(event)  # type: ignore[arg-type]
 
 
 class AnimatedProgressBar(QProgressBar):

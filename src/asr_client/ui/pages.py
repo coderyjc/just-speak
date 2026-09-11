@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -29,7 +30,12 @@ from asr_client.models import (
     AudioTrack,
     DEFAULT_POLISH_PROMPT,
 )
-from asr_client.ui.widgets import AnimatedProgressBar, Card, RecordingDot
+from asr_client.ui.widgets import (
+    ActivityHeatmap,
+    AnimatedProgressBar,
+    Card,
+    RecordingDot,
+)
 
 
 def _label(text: str, name: str) -> QLabel:
@@ -125,6 +131,192 @@ class Page(QWidget):
         self.page_status.setProperty("tone", tone)
         self.page_status.style().unpolish(self.page_status)
         self.page_status.style().polish(self.page_status)
+
+
+def _format_stat_duration(seconds: float) -> str:
+    total = max(0, round(seconds))
+    if total < 60:
+        return f"{total} 秒"
+    minutes = total // 60
+    if minutes < 60:
+        return f"{minutes} 分钟"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours} 小时 {minutes} 分" if minutes else f"{hours} 小时"
+
+
+class DashboardMetric(QFrame):
+    def __init__(self, label: str) -> None:
+        super().__init__()
+        self.setObjectName("dashboardMetric")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(11, 7, 11, 7)
+        layout.setSpacing(1)
+        layout.addWidget(_label(label, "dashboardMetricLabel"))
+        layout.addStretch(1)
+        self.value = _label("0", "dashboardMetricValue")
+        layout.addWidget(self.value)
+        self.detail = _label("", "dashboardMetricDetail")
+        layout.addWidget(self.detail)
+
+
+class HomePage(Page):
+    def __init__(self) -> None:
+        super().__init__()
+        self.scroll = QScrollArea()
+        self.scroll.setObjectName("dashboardScroll")
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content = QWidget()
+        content.setObjectName("dashboardContent")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 7, 2)
+        content_layout.setSpacing(9)
+
+        hero = Card("dashboardHero", shadow=False)
+        hero_layout = QHBoxLayout(hero)
+        hero_layout.setContentsMargins(17, 11, 17, 11)
+        hero_layout.setSpacing(17)
+        total_block = QVBoxLayout()
+        total_block.setSpacing(0)
+        total_block.addWidget(_label("累计语音书写", "dashboardHeroLabel"))
+        total_line = QHBoxLayout()
+        total_line.setSpacing(6)
+        self.total_chars = _label("0", "dashboardHeroValue")
+        total_line.addWidget(self.total_chars)
+        total_line.addWidget(_label("字", "dashboardHeroUnit"), 0, Qt.AlignmentFlag.AlignBottom)
+        total_line.addStretch(1)
+        total_block.addLayout(total_line)
+        self.total_meta = _label("语音 0 秒 · 费用 ¥0.0000", "dashboardHeroMeta")
+        self.total_meta.setToolTip("费用按音频时长 0.00033 元/秒估算")
+        total_block.addWidget(self.total_meta)
+        hero_layout.addLayout(total_block, 2)
+        hero_layout.addWidget(self._hero_divider())
+        realtime_block, self.realtime_chars, self.realtime_meta = self._type_block(
+            "实时录音"
+        )
+        hero_layout.addWidget(realtime_block, 2)
+        hero_layout.addWidget(self._hero_divider())
+        file_block, self.file_chars, self.file_meta = self._type_block("文件转写")
+        hero_layout.addWidget(file_block, 2)
+        content_layout.addWidget(hero)
+
+        heatmap_card = Card("dashboardCard", shadow=False)
+        heatmap_layout = QVBoxLayout(heatmap_card)
+        heatmap_layout.setContentsMargins(14, 9, 14, 8)
+        heatmap_layout.setSpacing(2)
+        heatmap_header = QHBoxLayout()
+        heatmap_header.addWidget(_label("每日语音输入", "cardTitle"))
+        heatmap_header.addStretch(1)
+        self.token_badge = _label("", "dashboardTokenBadge")
+        self.token_badge.setToolTip("仅在云端响应返回 usage 时累计")
+        heatmap_header.addWidget(self.token_badge)
+        self.heatmap_range = _label("过去 12 个月", "dashboardRange")
+        heatmap_header.addWidget(self.heatmap_range)
+        heatmap_layout.addLayout(heatmap_header)
+        self.heatmap = ActivityHeatmap()
+        heatmap_layout.addWidget(self.heatmap)
+        content_layout.addWidget(heatmap_card)
+
+        stats_card = Card("dashboardStats", shadow=False)
+        stats_grid = QGridLayout(stats_card)
+        stats_grid.setContentsMargins(8, 8, 8, 8)
+        stats_grid.setHorizontalSpacing(7)
+        stats_grid.setVerticalSpacing(7)
+        metric_specs = (
+            ("longest", "最长单条"),
+            ("peak", "峰值日期"),
+            ("active", "活跃天数"),
+            ("realtime_count", "实时录音"),
+            ("average", "平均字数"),
+            ("recent", "近 7 天"),
+        )
+        self.metrics: dict[str, DashboardMetric] = {}
+        for index, (key, label) in enumerate(metric_specs):
+            metric = DashboardMetric(label)
+            self.metrics[key] = metric
+            stats_grid.addWidget(metric, index // 3, index % 3)
+        stats_card.setMinimumHeight(140)
+        content_layout.addWidget(stats_card, 1)
+        self.scroll.setWidget(content)
+        self.layout.addWidget(self.scroll, 1)
+        self.set_statistics({})
+
+    @staticmethod
+    def _hero_divider() -> QFrame:
+        divider = QFrame()
+        divider.setObjectName("dashboardHeroDivider")
+        divider.setFrameShape(QFrame.Shape.VLine)
+        return divider
+
+    @staticmethod
+    def _type_block(label: str) -> tuple[QWidget, QLabel, QLabel]:
+        block = QWidget()
+        layout = QVBoxLayout(block)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(1)
+        layout.addWidget(_label(label, "dashboardTypeLabel"))
+        value = _label("0 字", "dashboardTypeValue")
+        layout.addWidget(value)
+        meta = _label("0 秒 · 0 条", "dashboardTypeMeta")
+        layout.addWidget(meta)
+        return block, value, meta
+
+    def set_statistics(self, stats: dict[str, object]) -> None:
+        number = lambda key: int(stats.get(key, 0) or 0)
+        self.total_chars.setText(f"{number('total_chars'):,}")
+        total_seconds = float(stats.get("total_seconds", 0) or 0)
+        cost_yuan = float(stats.get("cost_yuan", 0) or 0)
+        self.total_meta.setText(
+            f"语音 {_format_stat_duration(total_seconds)} · 费用 ¥{cost_yuan:.4f}"
+        )
+        self.realtime_chars.setText(f"{number('realtime_chars'):,} 字")
+        self.file_chars.setText(f"{number('file_chars'):,} 字")
+        realtime_count = number("realtime_count")
+        file_count = number("file_count")
+        self.realtime_meta.setText(
+            f"{_format_stat_duration(float(stats.get('realtime_seconds', 0) or 0))}"
+            f" · {realtime_count} 条"
+        )
+        self.file_meta.setText(
+            f"{_format_stat_duration(float(stats.get('file_seconds', 0) or 0))} · {file_count} 个文件"
+        )
+        self.metrics["longest"].value.setText(f"{number('longest_chars'):,} 字")
+        self.metrics["longest"].detail.setText("单条最终稿")
+        peak_date = str(stats.get("peak_date") or "")
+        self.metrics["peak"].value.setText(
+            peak_date[5:].replace("-", ".") if peak_date else "—"
+        )
+        self.metrics["peak"].detail.setText(f"{number('peak_chars'):,} 字")
+        self.metrics["active"].value.setText(f"{number('active_days')} 天")
+        self.metrics["active"].detail.setText("有提交记录")
+        self.metrics["realtime_count"].value.setText(f"{realtime_count} 条")
+        self.metrics["realtime_count"].detail.setText("累计完成")
+        self.metrics["average"].value.setText(
+            f"{number('realtime_average_chars'):,} 字"
+        )
+        self.metrics["average"].detail.setText("每条实时录音")
+        self.metrics["recent"].value.setText(
+            f"{number('realtime_last_7_days')} 条"
+        )
+        self.metrics["recent"].detail.setText("实时录音")
+        token_count = stats.get("token_count")
+        self.token_badge.setVisible(token_count is not None)
+        if token_count is not None:
+            self.token_badge.setText(f"{int(token_count):,} Token")
+        daily = stats.get("daily_chars")
+        self.heatmap.set_data(
+            daily if isinstance(daily, dict) else {},
+            str(stats.get("as_of_date") or ""),
+        )
+        as_of = str(stats.get("as_of_date") or "")
+        self.heatmap_range.setText(
+            f"12 个月 · 至 {as_of[5:].replace('-', '.')}"
+            if as_of
+            else "过去 12 个月"
+        )
+        valid = realtime_count + file_count
+        self.set_page_status(f"已统计 {valid} 条有效文稿", "success" if valid else "idle")
 
 
 PIPELINE_STAGES = (

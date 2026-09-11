@@ -29,7 +29,13 @@ from asr_client.models import AppConfig, JobUpdate, SessionStatus
 from asr_client.providers import DashScopeAsrProvider, DashScopeLlmProvider, MockAsrProvider
 from asr_client.storage.config import ApiKeyStore, ConfigStore, ScenarioStore
 from asr_client.storage.database import Database
-from asr_client.ui.pages import FilePage, HistoryPage, RealtimePage, SettingsPage
+from asr_client.ui.pages import (
+    FilePage,
+    HistoryPage,
+    HomePage,
+    RealtimePage,
+    SettingsPage,
+)
 from asr_client.ui.widgets import ThemedSizeGrip, WindowTitleBar
 
 
@@ -86,6 +92,7 @@ class MainWindow(QMainWindow):
         self._connect()
         self.refresh_microphones()
         self.refresh_history()
+        self.refresh_home()
         if startup_warning:
             QTimer.singleShot(
                 100,
@@ -114,13 +121,14 @@ class MainWindow(QMainWindow):
         self.navigation = QListWidget()
         self.navigation.setObjectName("navigation")
         self.navigation.setSpacing(2)
-        for name in ("实时录音", "文件转写", "历史记录", "设置"):
+        for name in ("主页", "实时录音", "文件转写", "历史记录", "设置"):
             self.navigation.addItem(name)
         self.navigation.setCurrentRow(0)
         side.addWidget(self.navigation, 1)
 
         self.pages = QStackedWidget()
         self.pages.setObjectName("pageStack")
+        self.home_page = HomePage()
         self.realtime_page = RealtimePage()
         self.file_page = FilePage()
         self.history_page = HistoryPage()
@@ -132,6 +140,7 @@ class MainWindow(QMainWindow):
         else:
             self.settings_page.set_page_status("等待 API Key", "warning")
         for page in (
+            self.home_page,
             self.realtime_page,
             self.file_page,
             self.history_page,
@@ -193,6 +202,8 @@ class MainWindow(QMainWindow):
         if index < 0 or index >= self.pages.count():
             return
         self.pages.setCurrentIndex(index)
+        if self.pages.currentWidget() is self.home_page:
+            self.refresh_home()
 
     def resizeEvent(self, event: object) -> None:  # noqa: N802 - Qt API
         super().resizeEvent(event)  # type: ignore[arg-type]
@@ -288,6 +299,7 @@ class MainWindow(QMainWindow):
             self._realtime_job = None
             return
         self._realtime_session_id = self._realtime_job.session_id
+        self.refresh_home()
         self.realtime_page.reset_pipeline()
         self.realtime_page.set_running(True)
         self._realtime_thread = threading.Thread(
@@ -343,6 +355,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "无法创建任务", str(exc))
             return
         self._file_session_id = self._file_job.session_id
+        self.refresh_home()
         self.file_page.transcript.clear()
         self.file_page.progress.setValue(0)
         self.file_page.set_running(True)
@@ -462,6 +475,7 @@ class MainWindow(QMainWindow):
                     self.file_page.save_edit.setVisible(False)
                 self._file_job = None
             self.refresh_history()
+            self.refresh_home()
 
     @staticmethod
     def _format_duration(message: str) -> str:
@@ -506,6 +520,9 @@ class MainWindow(QMainWindow):
                 self.database = Database(target_database)
                 old_database.close()
             self.config = config
+            if moving_database:
+                self.refresh_history()
+                self.refresh_home()
             self.settings_page.set_page_status(
                 f"已自动保存 · {datetime.now().strftime('%H:%M:%S')}", "success"
             )
@@ -522,7 +539,7 @@ class MainWindow(QMainWindow):
         self.config = config
         self.key_store.set(api_key, False)
         self._connection_test = True
-        self.navigation.setCurrentRow(0)
+        self.navigation.setCurrentRow(1)
         self.start_realtime()
         if self._realtime_job:
             QTimer.singleShot(4000, self.stop_realtime)
@@ -566,6 +583,9 @@ class MainWindow(QMainWindow):
             f"{len(rows)} 项记录" if rows else "暂无记录",
             "success" if rows else "idle",
         )
+
+    def refresh_home(self) -> None:
+        self.home_page.set_statistics(self.database.usage_statistics())
 
     def show_history(self, session_id: str) -> None:
         row = self.database.get_session(session_id)
@@ -631,7 +651,7 @@ class MainWindow(QMainWindow):
                     self.bridge.file_update.emit,
                 )
             self._file_session_id = session_id
-            self.navigation.setCurrentRow(1)
+            self.navigation.setCurrentRow(2)
             self.file_page.source.setText(row["source_path"] or row["title"])
             self.file_page.transcript.setPlainText(self.database.transcript(session_id))
             self.file_page.set_running(True)
@@ -650,6 +670,7 @@ class MainWindow(QMainWindow):
             return
         self.database.save_edited_text(session_id, text)
         export_transcript(Path(row["task_dir"]) / "transcript.txt", text)
+        self.refresh_home()
         QMessageBox.information(self, "已保存", "文字修改已经保存，原始识别结果仍保留在数据库中。")
 
     def export_history(self, session_id: str) -> None:
@@ -712,6 +733,7 @@ class MainWindow(QMainWindow):
             self._file_session_id = ""
         self.history_page.clear_detail()
         self.refresh_history()
+        self.refresh_home()
 
     def save_scenario(self, name: str, config: AppConfig) -> None:
         try:
@@ -762,6 +784,7 @@ class MainWindow(QMainWindow):
             row = self.database.get_session(self._realtime_session_id)
             if row:
                 export_transcript(Path(row["task_dir"]) / "transcript.txt", text)
+            self.refresh_home()
 
     def copy_realtime(self) -> None:
         if self._realtime_job is not None and self._realtime_session_id:
@@ -799,6 +822,7 @@ class MainWindow(QMainWindow):
                     Path(row["task_dir"]) / "transcript.txt",
                     self.file_page.transcript.toPlainText(),
                 )
+            self.refresh_home()
 
     def _export_text(self, text: str, default_name: str) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "导出 UTF-8 TXT", default_name, "文本文件 (*.txt)")

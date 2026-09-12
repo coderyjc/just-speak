@@ -1,9 +1,23 @@
 from __future__ import annotations
 
 import json
+import sys
 from types import SimpleNamespace
 
 import asr_client.audio.ffmpeg as ffmpeg_module
+
+
+def test_frozen_app_finds_bundled_ffmpeg(monkeypatch, tmp_path) -> None:
+    bundle_root = tmp_path / "bundle"
+    binary = bundle_root / "bin" / "ffmpeg.exe"
+    binary.parent.mkdir(parents=True)
+    binary.touch()
+    executable = tmp_path / "portable" / "JustSpeak.exe"
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(bundle_root), raising=False)
+    monkeypatch.setattr(sys, "executable", str(executable))
+
+    assert ffmpeg_module._candidate("", "ffmpeg") == str(binary)
 
 
 def test_probe_lists_only_audio_tracks(monkeypatch, tmp_path) -> None:
@@ -55,4 +69,3 @@ def test_conversion_maps_selected_track_and_uses_atomic_replace(
     assert ["-map", "0:3"] == seen[seen.index("-map") : seen.index("-map") + 2]
     assert "pcm_s16le" in seen
     assert destination.read_bytes() == b"wave"
-

@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from asr_client.models import AudioInfo, AudioTrack
@@ -24,9 +25,16 @@ def _candidate(path_hint: str, name: str) -> str | None:
             executable = hint
         if executable.exists():
             return str(executable)
-    project_bin = Path(__file__).resolve().parents[3] / "bin" / f"{name}.exe"
-    if project_bin.exists():
-        return str(project_bin)
+    roots = [Path(__file__).resolve().parents[3]]
+    if getattr(sys, "frozen", False):
+        roots.insert(0, Path(sys.executable).resolve().parent)
+        bundle_root = getattr(sys, "_MEIPASS", "")
+        if bundle_root:
+            roots.insert(1, Path(bundle_root))
+    for root in roots:
+        bundled = root / "bin" / f"{name}.exe"
+        if bundled.exists():
+            return str(bundled)
     return shutil.which(name)
 
 
@@ -154,4 +162,3 @@ def _safe_float(value: object) -> float:
         return float(str(value))
     except (TypeError, ValueError):
         return 0.0
-

@@ -1,0 +1,14 @@
+{
+  "name": "justspeak-webview-ui",
+  "private": true,
+  "version": "0.2.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5173",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/*.test.mjs",
+    "check": "node --check ../app/src/main/assets/app.js && node --check ../app/src/main/assets/web-core.js && npm run test && vite build --outDir ../../../build/web-check --emptyOutDir"
+  },
+  "devDependencies": {
+    "vite": "8.3.0"
+  }
+}

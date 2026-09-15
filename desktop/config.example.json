@@ -1,0 +1,22 @@
+{
+  "_schema_version": 2,
+  "region": "beijing",
+  "workspace_id": "",
+  "websocket_url": "",
+  "model": "qwen-audio-3.0-asr-flash-streaming",
+  "llm_model": "qwen-plus",
+  "transcription_prompt": "JustSpeak、Qwen-Audio、百炼、项目代号 Aurora",
+  "information_enhancement_enabled": false,
+  "ocr_model": "qwen3.5-ocr",
+  "ocr_base_url": "",
+  "ocr_prompt": "请仅输出图像中的文本内容。",
+  "ocr_context_max_chars": 300,
+  "polish_prompt": "请保留原意和事实，修复表达顺序与语病，只输出修复后的完整文本。",
+  "language": "zh",
+  "microphone": null,
+  "data_dir": "D:\\ASR-Client\\data",
+  "ffmpeg_path": "",
+  "chunk_seconds": 600,
+  "history_limit": 50,
+  "remember_key": false
+}

@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+  <meta name="theme-color" content="#f5f3ee">
+  <title>JustSpeak</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <svg class="icon-sprite" aria-hidden="true">
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.8 12 3l9 7.8v9.7a.5.5 0 0 1-.5.5H15v-7H9v7H3.5a.5.5 0 0 1-.5-.5z"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="8" y="2" width="8" height="13" rx="4"/><path d="M5 11a7 7 0 0 0 14 0M12 18v4M8 22h8"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 2h8l4 4v16H6zM14 2v5h5M9 12h6M9 16h6"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 2"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"/><path d="m4.9 4.9 2 1.1 2.2-.9.6-2.1h4.6l.6 2.1 2.2.9 2-1.1 3.2 3.2-1.1 2 .9 2.2 2.1.6v4.6l-2.1.6-.9 2.2 1.1 2-3.2 3.2-2-1.1-2.2.9-.6 2.1H9.7l-.6-2.1-2.2-.9-2 1.1-3.2-3.2 1.1-2-.9-2.2-2.1-.6V13l2.1-.6.9-2.2-1.1-2Z"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></symbol>
+    <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 18h11a4 4 0 0 0 .2-8A6.5 6.5 0 0 0 6 8.5 4.8 4.8 0 0 0 7 18Z"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V3M7 8l5-5 5 5M4 14v6h16v-6"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M7 5h3v14H7zM14 5h3v14h-3z"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m4 12 5 5L20 6"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 3h6l1 4H8zM7 7l1 14h8l1-14M10 11v6M14 11v6"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 15.5A8 8 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></symbol>
+    <symbol id="i-share" viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.7 10.7 6.6-4.4M8.7 13.3l6.6 4.4"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 19v2h16v-2"/></symbol>
+  </svg>
+
+  <div class="ambient ambient-a"></div>
+  <div class="ambient ambient-b"></div>
+
+  <div id="app" class="app-shell">
+    <main id="screen-stage" class="screen-stage">
+      <section class="screen is-active" data-screen="home" aria-labelledby="home-title">
+        <header class="page-header reveal">
+          <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+          <div class="header-copy"><small>JUSTSPEAK</small><h1 id="home-title">早上好</h1></div>
+          <button class="avatar-button pressable" data-go="settings" aria-label="打开设置">J</button>
+        </header>
+
+        <article class="hero-card reveal delay-1">
+          <div class="hero-top"><span class="eyebrow">你的声音档案</span><span class="secure-chip"><svg><use href="#i-lock"/></svg>本机管理</span></div>
+          <div class="hero-value"><strong id="usage-duration">0</strong><span>分钟</span></div>
+          <p>累计处理时长</p>
+          <div class="week-bars" aria-label="近七天使用趋势">
+            <i style="--h:22%"></i><i style="--h:38%"></i><i style="--h:28%"></i><i style="--h:62%"></i><i style="--h:42%"></i><i style="--h:78%"></i><i class="today" style="--h:56%"></i>
+          </div>
+          <div class="week-labels"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>今</span></div>
+        </article>
+
+        <div class="quick-grid reveal delay-2">
+          <button class="quick-card record pressable" data-go="record">
+            <span class="quick-icon"><svg><use href="#i-mic"/></svg></span>
+            <span><b>实时录音</b><small>边说边记</small></span>
+            <svg class="chevron"><use href="#i-chevron"/></svg>
+          </button>
+          <button class="quick-card file pressable" data-go="files">
+            <span class="quick-icon"><svg><use href="#i-upload"/></svg></span>
+            <span><b>文件转写</b><small>MP4 · AAC</small></span>
+            <svg class="chevron"><use href="#i-chevron"/></svg>
+          </button>
+        </div>
+
+        <div class="section-heading reveal delay-3"><h2>最近记录</h2><button data-go="history">查看全部</button></div>
+        <div id="recent-list" class="task-list reveal delay-3"></div>
+      </section>
+
+      <section class="screen" data-screen="record" aria-labelledby="record-title">
+        <header class="page-header compact">
+          <div class="header-copy"><small>LIVE CAPTURE</small><h1 id="record-title">实时录音</h1></div>
+          <span id="record-status" class="status-chip idle"><i></i>待机</span>
+        </header>
+
+        <button id="scenario-button" class="scenario-button pressable"><span>默认场景</span><span>⌄</span></button>
+
+        <div class="recorder-zone">
+          <div id="record-orb" class="record-orb idle" aria-hidden="true">
+            <div class="orb-halo"></div>
+            <div class="orb-core">
+              <div class="live-wave" id="live-wave"></div>
+            </div>
+          </div>
+          <div id="record-time" class="record-time">00:00:00</div>
+          <p id="record-caption" class="record-caption">轻触下方按钮开始记录</p>
+          <span id="segment-label" class="segment-label" hidden></span>
+        </div>
+
+        <article class="stage-card live-transcript-card">
+          <div class="live-transcript-heading"><span>实时原文</span><em id="cloud-state">等待开始</em></div>
+          <div id="live-transcript" class="live-transcript" aria-live="polite">
+            <p id="live-empty">开始说话后，稳定句和当前临时句会在这里连续呈现。</p>
+            <div id="live-final" class="live-final" hidden></div>
+            <div id="live-interim" class="live-interim" hidden></div>
+          </div>
+        </article>
+
+        <div id="record-controls" class="record-controls"></div>
+      </section>
+
+      <section class="screen" data-screen="files" aria-labelledby="files-title">
+        <header class="page-header compact">
+          <div class="header-copy"><small>MEDIA TO TEXT</small><h1 id="files-title">文件转写</h1></div>
+          <span class="status-chip sky"><i></i>本机处理</span>
+        </header>
+
+        <button id="media-picker" class="drop-card pressable">
+          <span class="drop-icon"><svg><use href="#i-upload"/></svg></span>
+          <strong>选择音视频文件</strong>
+          <span>首版重点支持 MP4 · AAC 音轨</span>
+        </button>
+        <input id="media-input" type="file" accept="audio/*,video/mp4,video/webm,video/quicktime" hidden>
+        <article id="media-selected" class="selected-media" hidden></article>
+        <div id="file-progress" class="file-progress" hidden><i></i><span>准备中</span></div>
+
+        <div class="section-heading"><h2>处理流程</h2></div>
+        <article class="process-card">
+          <div class="process-row ready"><span>1</span><div><b>网页解码</b><small>Web Audio 转换为 16 kHz 单声道 PCM</small></div><i></i></div>
+          <div class="process-line"></div>
+          <div class="process-row"><span>2</span><div><b>云端识别</b><small>按片段顺序转写，可暂停恢复</small></div><i></i></div>
+          <div class="process-line"></div>
+          <div class="process-row"><span>3</span><div><b>本机归档</b><small>文稿保存在 WebView 本地数据中</small></div><i></i></div>
+        </article>
+
+        <div class="secondary-card privacy-note"><span class="card-icon sky"><svg><use href="#i-lock"/></svg></span><span><b>文件留在当前页面</b><small>只向你配置的百炼端点发送标准 PCM</small></span></div>
+        <button id="start-file" class="primary-button pressable" disabled><svg><use href="#i-play"/></svg>开始转写</button>
+      </section>
+
+      <section class="screen" data-screen="history" aria-labelledby="history-title">
+        <header class="page-header compact">
+          <div class="header-copy"><small>YOUR ARCHIVE</small><h1 id="history-title">历史记录</h1></div>
+          <span id="history-count" class="count-badge">0</span>
+        </header>
+        <div class="filter-strip" role="tablist">
+          <button class="is-active" data-filter="ALL">全部</button>
+          <button data-filter="RECORDING">录音</button>
+          <button data-filter="MEDIA_FILE">文件</button>
+          <button data-filter="UNFINISHED">待继续</button>
+        </div>
+        <div id="history-list" class="task-list history-list"></div>
+      </section>
+
+      <section class="screen settings-screen" data-screen="settings" aria-labelledby="settings-title">
+        <header class="page-header compact">
+          <div class="header-copy"><small>PRIVATE BY DESIGN</small><h1 id="settings-title">设置</h1></div>
+          <span id="credential-status" class="status-chip idle"><i></i>未配置</span>
+        </header>
+
+        <form id="settings-form">
+          <div class="settings-group">
+            <div class="section-heading"><h2>云端凭据</h2><span>Keystore 加密</span></div>
+            <div class="settings-card">
+              <label class="field"><span>百炼 API Key</span><div class="input-action"><input id="api-key" type="password" autocomplete="off" placeholder="sk-••••••••"><button type="button" id="save-key">保存</button></div></label>
+              <button type="button" id="clear-key" class="danger-row"><svg><use href="#i-trash"/></svg>清除设备凭据</button>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <div class="section-heading"><h2>识别配置</h2></div>
+            <div class="settings-card fields">
+              <label class="field"><span>服务地域</span><select name="region"><option value="beijing">北京</option><option value="singapore">新加坡</option></select></label>
+              <label class="field"><span>识别语言</span><select name="language"><option value="zh">中文</option><option value="en">英文</option><option value="auto">自动识别</option></select></label>
+              <label class="field"><span>Workspace ID</span><input name="workspaceId" placeholder="可选"></label>
+              <label class="field"><span>ASR 模型</span><input name="asrModel"></label>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <div class="section-heading"><h2>偏好</h2></div>
+            <div class="settings-card fields">
+              <label class="switch-row"><span><svg><use href="#i-moon"/></svg><span><b>深色模式</b><small>跟随你的阅读环境</small></span></span><input name="darkTheme" type="checkbox"><i></i></label>
+              <label class="field"><span>历史保留数量</span><input name="historyLimit" type="number" min="10" max="600"></label>
+            </div>
+          </div>
+
+          <details class="advanced-card">
+            <summary>高级设置 <span>端点与 Prompt</span></summary>
+            <div class="advanced-fields">
+              <label class="field"><span>ASR WebSocket URL</span><input name="asrWebSocketUrl" placeholder="使用地域默认端点"></label>
+              <label class="field"><span>识别上下文</span><textarea name="asrPrompt" rows="3" placeholder="术语、人名、产品名"></textarea></label>
+            </div>
+          </details>
+
+          <button class="primary-button pressable save-settings" type="submit"><svg><use href="#i-check"/></svg>保存设置</button>
+        </form>
+      </section>
+    </main>
+
+    <nav class="bottom-nav" aria-label="主导航">
+      <button class="is-active" data-page="home"><svg><use href="#i-home"/></svg><span>主页</span></button>
+      <button data-page="record"><svg><use href="#i-mic"/></svg><span>录音</span></button>
+      <button data-page="files"><svg><use href="#i-file"/></svg><span>文件</span></button>
+      <button data-page="history"><svg><use href="#i-history"/></svg><span>历史</span></button>
+      <button data-page="settings"><svg><use href="#i-settings"/></svg><span>设置</span></button>
+    </nav>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="sheet-backdrop" class="sheet-backdrop" hidden>
+    <div class="bottom-sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+      <div class="sheet-handle"></div><h2 id="sheet-title">选择录音场景</h2>
+      <button class="sheet-option is-active" data-scenario="默认场景"><span><b>默认场景</b><small>均衡记录日常交流</small></span><svg><use href="#i-check"/></svg></button>
+      <button class="sheet-option" data-scenario="会议纪要"><span><b>会议纪要</b><small>关注议题、结论和待办</small></span><svg><use href="#i-check"/></svg></button>
+      <button class="sheet-option" data-scenario="灵感速记"><span><b>灵感速记</b><small>保留口语节奏与关键词</small></span><svg><use href="#i-check"/></svg></button>
+    </div>
+  </div>
+
+  <div id="detail-backdrop" class="sheet-backdrop" hidden>
+    <article class="bottom-sheet detail-sheet" role="dialog" aria-modal="true" aria-labelledby="detail-title">
+      <div class="sheet-handle"></div>
+      <div class="detail-heading"><div><h2 id="detail-title">文稿详情</h2><p id="detail-meta"></p></div><button class="avatar-button pressable" data-close-detail aria-label="关闭">×</button></div>
+      <div id="detail-transcript" class="detail-transcript"></div>
+      <div class="detail-actions">
+        <button class="pressable" data-detail-action="copy"><svg><use href="#i-copy"/></svg>复制</button>
+        <button class="pressable" data-detail-action="share"><svg><use href="#i-share"/></svg>分享</button>
+        <button class="pressable" data-detail-action="txt"><svg><use href="#i-download"/></svg>TXT</button>
+        <button id="detail-audio" class="pressable" data-detail-action="audio"><svg><use href="#i-download"/></svg>WAV</button>
+      </div>
+    </article>
+  </div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

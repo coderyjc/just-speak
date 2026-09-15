@@ -1,20 +1,13 @@
-# Python bytecode and environments
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
 .venv/
 venv/
 env/
-
-# Packaging and generated artifacts
-build/
-dist/
 *.egg-info/
 *.egg
 *.whl
-*.ico
-
-# Tests, coverage and static analysis
 .pytest_cache/
 .coverage
 .coverage.*
@@ -26,33 +19,60 @@ htmlcov/
 .tox/
 .nox/
 
-# IDE and operating-system files
+# Android / Gradle
+.gradle/
+/android/local.properties
+/android/keystore.properties
+/android/captures/
+/android/.kotlin/
+/android/.tooling/
+/.kotlin/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.apks
+*.jks
+*.keystore
+
+# Node / Vite
+node_modules/
+.vite/
+
+# Build and generated artifacts
+build/
+dist/
+*.ico
+
+# IDE and operating system
 .idea/
 .vscode/
+.vs/
 *.code-workspace
 .DS_Store
 Thumbs.db
 Desktop.ini
 
-# Local application state
-/data/
-/logs/
-/bin/
-/tasks/
+# Desktop application state
+/desktop/data/
+/desktop/logs/
+/desktop/bin/
+/desktop/tasks/
 *.sqlite3
 *.sqlite3-shm
 *.sqlite3-wal
 *.db-shm
 *.db-wal
 *.log
-/config.json
-/scenarios.json
-/startup-error.log
+/desktop/config.json
+/desktop/scenarios.json
+/desktop/startup-error.log
 
-# Secrets and local environment overrides
+# Secrets and local overrides
 .env
 .env.*
 !.env.example
+!.env.*.example
 *.pem
 *.p12
 *.pfx

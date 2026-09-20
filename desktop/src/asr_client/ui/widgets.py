@@ -4,8 +4,10 @@ import math
 from datetime import date, timedelta
 
 from PySide6.QtCore import (
+    QEvent,
     Property,
     QEasingCurve,
+    QPointF,
     QPropertyAnimation,
     QRect,
     QRectF,
@@ -13,7 +15,7 @@ from PySide6.QtCore import (
     Qt,
     QTimer,
 )
-from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen
+from PySide6.QtGui import QColor, QEnterEvent, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
@@ -53,6 +55,140 @@ def animate_reveal(
     animation.finished.connect(finish)
     widget._reveal_animation = animation  # type: ignore[attr-defined]
     animation.start()
+
+
+class SidebarMiniButton(QPushButton):
+    """Prominent bottom-of-sidebar entry for the compact floating mode."""
+
+    def __init__(self) -> None:
+        super().__init__("Mini")
+        self.setObjectName("miniModeButton")
+        self.setFixedHeight(44)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setToolTip("切换到 Mini")
+        self.setAccessibleName("Mini")
+        self._hover_progress = 0.0
+        self._hover_animation = QPropertyAnimation(self, b"hoverProgress", self)
+        self._hover_animation.setDuration(155)
+        self._hover_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    def getHoverProgress(self) -> float:  # noqa: N802 - Qt property API
+        return self._hover_progress
+
+    def setHoverProgress(self, value: float) -> None:  # noqa: N802 - Qt property API
+        self._hover_progress = max(0.0, min(1.0, float(value)))
+        self.update()
+
+    hoverProgress = Property(float, getHoverProgress, setHoverProgress)
+
+    def _animate_hover(self, target: float) -> None:
+        self._hover_animation.stop()
+        self._hover_animation.setStartValue(self._hover_progress)
+        self._hover_animation.setEndValue(target)
+        self._hover_animation.start()
+
+    def enterEvent(self, event: QEnterEvent) -> None:  # noqa: N802 - Qt API
+        self._animate_hover(1.0)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event: QEvent) -> None:  # noqa: N802 - Qt API
+        self._animate_hover(0.0)
+        super().leaveEvent(event)
+
+    @staticmethod
+    def _blend(start: str, end: str, progress: float) -> QColor:
+        first = QColor(start)
+        second = QColor(end)
+        return QColor(
+            round(first.red() + (second.red() - first.red()) * progress),
+            round(first.green() + (second.green() - first.green()) * progress),
+            round(first.blue() + (second.blue() - first.blue()) * progress),
+        )
+
+    def paintEvent(self, event: object) -> None:  # noqa: N802 - Qt API
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        progress = min(1.0, self._hover_progress + (0.12 if self.isDown() else 0.0))
+        pressed_offset = 1.0 if self.isDown() else 0.0
+
+        shadow = QRectF(self.rect()).adjusted(0.75, 3.25, -0.75, -0.75)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(8, 11, 14, round(105 - 30 * progress)))
+        painter.drawRoundedRect(shadow, 15, 15)
+
+        card = QRectF(self.rect()).adjusted(
+            0.75,
+            0.75 + pressed_offset,
+            -0.75,
+            -3.0 + pressed_offset,
+        )
+        painter.setBrush(self._blend("#242c33", "#303a42", progress))
+        painter.setPen(
+            QPen(self._blend("#3b4650", "#ff6542", progress), 1.15)
+        )
+        painter.drawRoundedRect(card, 14, 14)
+
+        highlight = self._blend("#49545d", "#ff8a70", progress)
+        highlight.setAlpha(round(72 + 38 * progress))
+        painter.setPen(QPen(highlight, 1.0))
+        painter.drawLine(
+            QPointF(card.left() + 14, card.top() + 1.2),
+            QPointF(card.right() - 14, card.top() + 1.2),
+        )
+
+        icon_color = self._blend("#9eabb5", "#ff7657", progress)
+        icon = QRectF(
+            10.5 + progress * 1.5,
+            card.center().y() - 7.5,
+            20,
+            15,
+        )
+        painter.setPen(QPen(icon_color, 1.45))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(icon, 5, 5)
+        painter.drawLine(
+            QPointF(icon.left() + 6, icon.center().y()),
+            QPointF(icon.right() - 6, icon.center().y()),
+        )
+
+        text_left = 38.0 + progress
+        text_width = max(1.0, self.width() - text_left - 14.0)
+        primary_font = self.font()
+        primary_font.setPixelSize(15)
+        primary_font.setBold(True)
+        painter.setFont(primary_font)
+        painter.setPen(self._blend("#f0f3f4", "#fffdf8", progress))
+        painter.drawText(
+            QRectF(
+                text_left,
+                card.top(),
+                text_width,
+                card.height(),
+            ),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            self.text(),
+        )
+
+        chevron_x = self.width() - 9.0 + progress
+        chevron_y = card.center().y()
+        painter.setPen(
+            QPen(
+                self._blend("#68747e", "#fff4ef", progress),
+                1.35,
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+                Qt.PenJoinStyle.RoundJoin,
+            )
+        )
+        painter.drawLine(
+            QPointF(chevron_x - 3, chevron_y - 4),
+            QPointF(chevron_x, chevron_y),
+        )
+        painter.drawLine(
+            QPointF(chevron_x, chevron_y),
+            QPointF(chevron_x - 3, chevron_y + 4),
+        )
 
 
 class AnimatedListWidget(QListWidget):

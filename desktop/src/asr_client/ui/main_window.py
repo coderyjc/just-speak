@@ -40,6 +40,11 @@ from asr_client.screen_context import (
 )
 from asr_client.storage.config import ApiKeyStore, ConfigStore, ScenarioStore
 from asr_client.storage.database import Database
+from asr_client.ui.mini_window import (
+    GlobalAltHotkey,
+    MiniWindow,
+    mini_shortcut_display,
+)
 from asr_client.ui.pages import (
     FilePage,
     HistoryPage,
@@ -49,6 +54,7 @@ from asr_client.ui.pages import (
 )
 from asr_client.ui.widgets import (
     AnimatedListWidget,
+    SidebarMiniButton,
     ThemedSizeGrip,
     WindowTitleBar,
     animate_reveal,
@@ -104,10 +110,23 @@ class MainWindow(QMainWindow):
         self._connection_test = False
         self._realtime_preparing = False
         self._closing = False
+        self._close_to_tray = False
+        self._quit_requested = False
+        self._mini_mode = False
+        self._mini_round_complete = False
+        self._abort_reset_pending = False
         self.bridge = Bridge()
         self.setWindowTitle("JustSpeak · 云端语音转文字")
         self.resize(784, 532)
         self.setMinimumSize(672, 455)
+        self.mini_window = MiniWindow()
+        self.mini_window.setWindowIcon(self.windowIcon())
+        self._mini_hotkey = GlobalAltHotkey(
+            self.mini_window,
+            self,
+            shortcut=self.config.mini_mode_shortcut,
+        )
+        self.mini_window.set_shortcut(self.config.mini_mode_shortcut)
         self._build_ui()
         self._connect()
         self._build_realtime_shortcuts()
@@ -147,6 +166,8 @@ class MainWindow(QMainWindow):
             self.navigation.addItem(name)
         self.navigation.setCurrentRow(0)
         side.addWidget(self.navigation, 1)
+        self.mini_mode_button = SidebarMiniButton()
+        side.addWidget(self.mini_mode_button)
 
         self.pages = QStackedWidget()
         self.pages.setObjectName("pageStack")
@@ -181,6 +202,14 @@ class MainWindow(QMainWindow):
 
     def _connect(self) -> None:
         self.navigation.currentRowChanged.connect(self._switch_page)
+        self.mini_mode_button.clicked.connect(self.enter_mini_mode)
+        self.mini_window.main_window_requested.connect(self.show_main_window)
+        self.mini_window.home_requested.connect(self.show_home_window)
+        self.mini_window.pause_toggle_requested.connect(
+            self._handle_mini_pause_toggle
+        )
+        self.mini_window.cancel_requested.connect(self.abort_realtime)
+        self._mini_hotkey.activated.connect(self._handle_mini_global_hotkey)
         self.realtime_page.refresh.clicked.connect(self.refresh_microphones)
         self.settings_page.information_enhancement.toggled.connect(
             self.realtime_page.set_information_enhancement_enabled
@@ -289,6 +318,12 @@ class MainWindow(QMainWindow):
             return super().eventFilter(watched, event)
         focused = QApplication.focusWidget()
         if focused is not None and focused.window() is not self:
+            return super().eventFilter(watched, event)
+        if getattr(event, "key", lambda: None)() == Qt.Key.Key_Escape:
+            if self._realtime_preparing or self._realtime_job is not None:
+                if not getattr(event, "isAutoRepeat", lambda: False)():
+                    self.abort_realtime()
+                return True
             return super().eventFilter(watched, event)
         key_combination = getattr(event, "keyCombination", lambda: None)()
         if key_combination is None:
@@ -410,10 +445,9 @@ class MainWindow(QMainWindow):
 
     def toggle_realtime(self) -> None:
         if self._realtime_job is None:
-            if self.realtime_page.can_copy_and_reset():
+            if self._mini_round_complete or self.realtime_page.can_copy_and_reset():
                 QApplication.clipboard().setText(self.realtime_page.final_text())
-                self.realtime_page.reset_for_next_round()
-                self._realtime_session_id = ""
+                self._reset_realtime_round()
                 self.realtime_page.set_page_status(
                     self.realtime_page.next_round_status(), "success"
                 )
@@ -427,6 +461,8 @@ class MainWindow(QMainWindow):
     def start_realtime(self) -> None:
         if self._realtime_job is not None or self._realtime_preparing:
             return
+        self._mini_round_complete = False
+        self._abort_reset_pending = False
         # Read the live settings controls so a just-changed OCR limit takes effect
         # even when the debounce timer has not emitted its auto-save yet.
         config = self.settings_page.values()
@@ -445,6 +481,7 @@ class MainWindow(QMainWindow):
         self, config: AppConfig, screen_name: str
     ) -> None:
         self._realtime_preparing = True
+        self.mini_window.set_status("context")
         self.realtime_page.reset_pipeline(context_enabled=True, started=True)
         self.realtime_page.set_recording_state("preparing")
         logger.info("信息增强开始：screen=%s", screen_name or "auto")
@@ -540,6 +577,7 @@ class MainWindow(QMainWindow):
                     "或 fun-asr-realtime；HTTP 模型请前往“文件转写”。",
                 )
                 self.realtime_page.set_recording_state("idle")
+                self.mini_window.set_status("failed")
                 return
             self._realtime_job = RealtimeJob(
                 self.database,
@@ -566,6 +604,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "无法开始录音", str(exc))
             self._realtime_job = None
             self.realtime_page.set_recording_state("idle")
+            self.mini_window.set_status("failed")
             return
         self._realtime_session_id = self._realtime_job.session_id
         pruned, _ = self._enforce_history_limit()
@@ -577,6 +616,7 @@ class MainWindow(QMainWindow):
         else:
             self.realtime_page.reset_pipeline(False, started=True)
         self.realtime_page.set_running(True)
+        self.mini_window.set_status("recording")
         self._realtime_thread = threading.Thread(
             target=self._realtime_job.run, name="realtime-job", daemon=True
         )
@@ -585,15 +625,76 @@ class MainWindow(QMainWindow):
     def pause_realtime(self) -> None:
         if self._realtime_job and self._realtime_job.pause():
             self.realtime_page.set_recording_state("paused")
+            self.mini_window.set_status("paused")
 
     def resume_realtime(self) -> None:
         if self._realtime_job and self._realtime_job.resume():
             self.realtime_page.set_recording_state("recording")
+            self.mini_window.set_status("recording")
 
     def stop_realtime(self) -> None:
         if self._realtime_job and not self._realtime_job.is_stopping:
             self.realtime_page.set_recording_state("stopping")
+            self.mini_window.set_status("clarity")
             self._realtime_job.stop()
+
+    def abort_realtime(self) -> None:
+        if self._realtime_preparing and self._realtime_job is None:
+            self._realtime_preparing = False
+            self._reset_realtime_round()
+            return
+        if self._realtime_job is not None:
+            self._abort_reset_pending = True
+            self._mini_round_complete = False
+            self.realtime_page.set_recording_state("stopping")
+            self.realtime_page.set_page_status("正在终止并重置录音…", "warning")
+            self.mini_window.set_status("resetting")
+            abort = getattr(self._realtime_job, "abort", None)
+            if callable(abort):
+                abort()
+            else:
+                self._realtime_job.stop()
+            return
+        self._reset_realtime_round()
+
+    def _reset_realtime_round(self) -> None:
+        self._realtime_preparing = False
+        self._mini_round_complete = False
+        self._abort_reset_pending = False
+        self._realtime_session_id = ""
+        self.realtime_page.reset_for_next_round()
+        self.mini_window.set_status("ready")
+
+    def _handle_mini_pause_toggle(self) -> None:
+        if not self._mini_mode or self._realtime_job is None:
+            return
+        if self._realtime_job.is_stopping:
+            return
+        if self._realtime_job.is_paused:
+            self.resume_realtime()
+        else:
+            self.pause_realtime()
+
+    def _handle_mini_global_hotkey(self, _virtual_key: int = 0) -> None:
+        if not self._mini_mode or self._abort_reset_pending:
+            return
+        if self._mini_round_complete:
+            self._reset_realtime_round()
+            self.realtime_page.set_page_status(
+                "已重置 · 再按"
+                f"{mini_shortcut_display(self.config.mini_mode_shortcut)}"
+                "开始下一轮",
+                "success",
+            )
+            return
+        if self._realtime_preparing:
+            self.abort_realtime()
+            return
+        if self._realtime_job is not None:
+            if not self._realtime_job.is_stopping:
+                self.stop_realtime()
+            return
+        self.start_realtime()
 
     def inspect_media(self, path: str) -> None:
         if not path:
@@ -697,6 +798,9 @@ class MainWindow(QMainWindow):
         if update.kind == "recording_state" and source == "realtime":
             state = str(update.payload or "recording")
             self.realtime_page.set_recording_state(state)
+            self.mini_window.set_status(
+                "paused" if state == "paused" else "recording"
+            )
             self.realtime_page.set_page_status(
                 update.message, "warning" if state == "paused" else "live"
             )
@@ -725,6 +829,15 @@ class MainWindow(QMainWindow):
             state = str(payload.get("state") or "running")
             text = str(payload.get("text") or "")
             self.realtime_page.set_stage_state(stage, state, text)
+            if state == "running":
+                mini_status = {
+                    "context": "context",
+                    "asr": "recording",
+                    "clarity": "clarity",
+                    "polish": "polish",
+                }.get(stage)
+                if mini_status:
+                    self.mini_window.set_status(mini_status)
             tone = "danger" if state == "failed" else (
                 "success" if state == "completed" else "live"
             )
@@ -738,19 +851,35 @@ class MainWindow(QMainWindow):
             return
         if update.kind in {"completed", "incomplete", "error", "cancelled"}:
             if source == "realtime":
-                if update.kind == "completed":
+                reset_after_abort = self._abort_reset_pending
+                if update.kind == "completed" and not reset_after_abort:
                     self.realtime_page.finish_pipeline()
                 self.realtime_page.set_running(False)
-                self.realtime_page.set_page_status(
-                    update.message,
-                    (
-                        "warning"
-                        if update.kind != "completed" or "部分" in update.message
-                        else "success"
-                    ),
-                )
                 self._realtime_job = None
-                if self._connection_test:
+                if reset_after_abort:
+                    self._reset_realtime_round()
+                    self.realtime_page.set_page_status(
+                        "录音流程已重置 · 可重新开始", "idle"
+                    )
+                else:
+                    self.realtime_page.set_page_status(
+                        update.message,
+                        (
+                            "warning"
+                            if update.kind != "completed" or "部分" in update.message
+                            else "success"
+                        ),
+                    )
+                    self._mini_round_complete = update.kind == "completed"
+                    if update.kind == "completed":
+                        self.mini_window.set_status("completed")
+                        if self._mini_mode:
+                            QApplication.clipboard().setText(
+                                self.realtime_page.final_text()
+                            )
+                    else:
+                        self.mini_window.set_status("failed")
+                if self._connection_test and not reset_after_abort:
                     self._connection_test = False
                     if update.kind == "completed":
                         QMessageBox.information(self, "连接测试成功", "模型已返回结果，配置可用。")
@@ -818,6 +947,8 @@ class MainWindow(QMainWindow):
                 self.database = Database(target_database)
                 old_database.close()
             self.config = config
+            self._mini_hotkey.set_shortcut(config.mini_mode_shortcut)
+            self.mini_window.set_shortcut(config.mini_mode_shortcut)
             self.realtime_page.set_information_enhancement_enabled(
                 config.information_enhancement_enabled
             )
@@ -1107,6 +1238,8 @@ class MainWindow(QMainWindow):
             return
         self.settings_page.apply_config(config)
         self.config = config
+        self._mini_hotkey.set_shortcut(config.mini_mode_shortcut)
+        self.mini_window.set_shortcut(config.mini_mode_shortcut)
         self.config_store.save(config)
         item = self.scenario_store.get(scenario_id)
         name = str(item.get("name") if item else "场景")
@@ -1174,9 +1307,81 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 QMessageBox.critical(self, "导出失败", str(exc))
 
-    def closeEvent(self, event: QCloseEvent) -> None:
+    def set_close_to_tray(self, enabled: bool) -> None:
+        self._close_to_tray = enabled
+
+    def enter_mini_mode(self) -> None:
+        if self._closing or self._mini_mode:
+            return
+        self._mini_mode = True
+        self.hide()
+        self._sync_mini_status()
+        self.mini_window.show_for_mode()
+        self._mini_hotkey.set_enabled(True)
+
+    def show_main_window(self) -> None:
+        self._mini_mode = False
+        self._mini_hotkey.set_enabled(False)
+        self.mini_window.hide()
+        if self.isMinimized():
+            self.showNormal()
+        else:
+            self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def show_home_window(self) -> None:
+        self.navigation.setCurrentRow(0)
+        self.show_main_window()
+
+    def toggle_mini_mode(self) -> None:
+        if self._mini_mode:
+            self.show_main_window()
+        else:
+            self.enter_mini_mode()
+
+    def _sync_mini_status(self) -> None:
+        if self._mini_round_complete:
+            status = "completed"
+        elif self._abort_reset_pending:
+            status = "resetting"
+        elif self._realtime_preparing:
+            status = "context"
+        elif self._realtime_job is None:
+            status = "ready"
+        elif self._realtime_job.is_paused:
+            status = "paused"
+        elif self._realtime_job.is_stopping:
+            running_stage = next(
+                (
+                    stage
+                    for stage in ("polish", "clarity")
+                    if self.realtime_page._stage_states.get(stage) == "running"
+                ),
+                "clarity",
+            )
+            status = running_stage
+        else:
+            status = "recording"
+        self.mini_window.set_status(status)
+
+    def quit_application(self) -> None:
+        self.request_quit()
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
+
+    def request_quit(self) -> None:
+        self._quit_requested = True
+        self.close()
+
+    def shutdown(self) -> None:
+        if self._closing:
+            return
         self._closing = True
         self._realtime_preparing = False
+        self._mini_hotkey.close_registration()
+        self.mini_window.close_for_shutdown()
         app = QApplication.instance()
         if app is not None:
             app.removeEventFilter(self)
@@ -1187,4 +1392,11 @@ class MainWindow(QMainWindow):
         for thread in (self._realtime_thread, self._file_thread):
             if thread and thread.is_alive():
                 thread.join(timeout=5)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self._close_to_tray and not self._quit_requested:
+            event.ignore()
+            self.hide()
+            return
+        self.shutdown()
         event.accept()

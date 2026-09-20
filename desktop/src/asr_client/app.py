@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication
 from asr_client.storage.config import ApiKeyStore, ConfigStore, app_config_dir
 from asr_client.storage.database import Database
 from asr_client.ui.main_window import MainWindow
+from asr_client.ui.system_tray import SystemTrayController
 from asr_client.ui.theme import APP_STYLESHEET
 
 
@@ -48,9 +49,10 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("JustSpeak")
     app.setOrganizationName("JustSpeak")
-    app.setWindowIcon(
-        QIcon(str(Path(__file__).resolve().parent / "ui" / "assets" / "justspeak.svg"))
+    icon = QIcon(
+        str(Path(__file__).resolve().parent / "ui" / "assets" / "justspeak.svg")
     )
+    app.setWindowIcon(icon)
     app.setStyle("Fusion")
     app.setStyleSheet(STYLE)
     config_store = ConfigStore()
@@ -63,10 +65,23 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     window = MainWindow(database, config_store, ApiKeyStore(), warning)
+    tray: SystemTrayController | None = None
+    if SystemTrayController.is_available():
+        tray = SystemTrayController(app, window, icon, window)
+        window.set_close_to_tray(True)
+        app.setQuitOnLastWindowClosed(False)
+
+        tray.floating_window_toggle_requested.connect(window.toggle_mini_mode)
+        tray.quit_requested.connect(window.quit_application)
+        tray.show()
+    app.aboutToQuit.connect(window.shutdown)
     window.show()
     try:
         return app.exec()
     finally:
+        if tray is not None:
+            tray.hide()
+        window.shutdown()
         window.database.close()
 
 

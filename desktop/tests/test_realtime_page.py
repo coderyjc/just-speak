@@ -98,6 +98,7 @@ def test_shortcut_settings_can_be_changed_and_disabled() -> None:
         realtime_toggle_shortcut_enabled=True,
         realtime_stop_shortcut="Ctrl+S",
         realtime_stop_shortcut_enabled=False,
+        mini_mode_shortcut="F9",
         history_limit=320,
         information_enhancement_enabled=True,
         ocr_model="qwen3.5-ocr-test",
@@ -111,6 +112,7 @@ def test_shortcut_settings_can_be_changed_and_disabled() -> None:
     assert values.realtime_toggle_shortcut_enabled
     assert values.realtime_stop_shortcut == "Ctrl+S"
     assert not values.realtime_stop_shortcut_enabled
+    assert values.mini_mode_shortcut == "F9"
     assert values.history_limit == 320
     assert page.history_limit.minimum() == 10
     assert page.history_limit.maximum() == 600
@@ -124,9 +126,11 @@ def test_shortcut_settings_can_be_changed_and_disabled() -> None:
 
     page.toggle_shortcut.setKeySequence(QKeySequence("F8"))
     page.stop_shortcut_enabled.setChecked(True)
+    page.mini_shortcut.set_shortcut("Ctrl+F8")
     values = page.values()
     assert values.realtime_toggle_shortcut == "F8"
     assert values.realtime_stop_shortcut_enabled
+    assert values.mini_mode_shortcut == "Ctrl+F8"
     page.information_enhancement.setChecked(False)
     assert not page.ocr_model.isEnabled()
     page.deleteLater()

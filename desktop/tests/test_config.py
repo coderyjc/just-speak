@@ -48,6 +48,7 @@ def test_config_round_trip_contains_no_secret(tmp_path) -> None:
         realtime_toggle_shortcut="Ctrl+Space",
         realtime_toggle_shortcut_enabled=False,
         realtime_stop_shortcut="F8",
+        mini_mode_shortcut="F9",
         information_enhancement_enabled=True,
         ocr_model="qwen3.5-ocr",
         ocr_base_url="https://ocr.example/v1",
@@ -64,6 +65,7 @@ def test_config_round_trip_contains_no_secret(tmp_path) -> None:
     assert loaded.realtime_toggle_shortcut == "Ctrl+Space"
     assert loaded.realtime_toggle_shortcut_enabled is False
     assert loaded.realtime_stop_shortcut == "F8"
+    assert loaded.mini_mode_shortcut == "F9"
     assert loaded.information_enhancement_enabled is True
     assert loaded.ocr_model == "qwen3.5-ocr"
     assert loaded.ocr_base_url == "https://ocr.example/v1"

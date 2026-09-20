@@ -70,6 +70,7 @@ class AppConfig:
     realtime_toggle_shortcut_enabled: bool = True
     realtime_stop_shortcut: str = "S"
     realtime_stop_shortcut_enabled: bool = True
+    mini_mode_shortcut: str = "RightAlt"
     remember_key: bool = False
 
     def endpoint(self) -> str:

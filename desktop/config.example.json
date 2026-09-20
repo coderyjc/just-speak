@@ -18,5 +18,6 @@
   "ffmpeg_path": "",
   "chunk_seconds": 600,
   "history_limit": 50,
+  "mini_mode_shortcut": "RightAlt",
   "remember_key": false
 }

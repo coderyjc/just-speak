@@ -60,6 +60,7 @@ class RealtimeJob:
         self.text_provider = text_provider
         self.text_stage_timeout = max(0.1, float(text_stage_timeout))
         self._stop_requested = threading.Event()
+        self._abort_requested = threading.Event()
         self._paused = threading.Event()
         self._stream_restart_requested = threading.Event()
         self._state_lock = threading.Lock()
@@ -100,6 +101,10 @@ class RealtimeJob:
         self._stop_requested.set()
         with self._condition:
             self._condition.notify_all()
+
+    def abort(self) -> None:
+        self._abort_requested.set()
+        self.stop()
 
     @property
     def is_paused(self) -> bool:
@@ -286,6 +291,14 @@ class RealtimeJob:
                         timeout=0.5,
                     )
                     durable = self._durable_samples
+                if self._abort_requested.is_set():
+                    if self._stream is not None:
+                        self._invalidate_callback()
+                        try:
+                            self._stream.abort()
+                        finally:
+                            self._stream = None
+                    break
                 if self._fatal.is_set():
                     break
                 restart_stream = self._stream_restart_requested.is_set()
@@ -535,6 +548,9 @@ class RealtimeJob:
                 finalize_pcm_wav(self.pcm_path, self.wav_path)
             except Exception as exc:
                 self._fail_local(f"WAV 封装失败：{exc}")
+        if self._abort_requested.is_set():
+            self._finish_aborted()
+            return
         if self._fatal.is_set():
             self.database.set_session_status(
                 self.session_id, SessionStatus.FAILED, self._fatal_message
@@ -554,7 +570,11 @@ class RealtimeJob:
                 self._publish()
                 self.update(JobUpdate("incomplete", "录音已保存，尾部等待重试"))
                 return
-            if not self._transcribe_gaps():
+            gaps_completed = self._transcribe_gaps()
+            if self._abort_requested.is_set():
+                self._finish_aborted()
+                return
+            if not gaps_completed:
                 self.database.set_session_status(
                     self.session_id,
                     SessionStatus.INCOMPLETE,
@@ -565,6 +585,9 @@ class RealtimeJob:
                 return
         self._publish()
         pipeline_errors = self._process_text_pipeline()
+        if self._abort_requested.is_set():
+            self._finish_aborted()
+            return
         self.database.set_session_status(
             self.session_id,
             SessionStatus.COMPLETED,
@@ -576,6 +599,13 @@ class RealtimeJob:
         elif self.text_provider is None or not self.config.llm_model.strip():
             message = "录音与转写已完成；配置 LLM 后可自动清洗"
         self.update(JobUpdate("completed", message, 100, self.session_id))
+
+    def _finish_aborted(self) -> None:
+        self.database.set_session_status(
+            self.session_id, SessionStatus.CANCELLED, "用户终止了录音流程"
+        )
+        self._publish()
+        self.update(JobUpdate("cancelled", "录音流程已终止并重置"))
 
     def _process_text_pipeline(self) -> list[str]:
         raw_text = self.database.transcript(self.session_id, include_pending=False).strip()
@@ -626,6 +656,8 @@ class RealtimeJob:
             ),
         )
         for stage, ordinal, label, prompt in stages:
+            if self._abort_requested.is_set():
+                break
             self.database.save_text_stage(
                 self.session_id,
                 stage,
@@ -769,6 +801,8 @@ class RealtimeJob:
         all_ok = True
         gap_rows = [row for row in self.database.all_units(self.session_id) if row["kind"] == "gap"]
         for row, (gap_start, gap_end) in zip(gap_rows, self._gaps):
+            if self._abort_requested.is_set():
+                return False
             unit_id = row["id"]
             self.database.set_unit_status(unit_id, UnitStatus.RUNNING, increment_attempt=True)
             try:

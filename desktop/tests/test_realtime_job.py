@@ -99,6 +99,27 @@ def test_simulated_realtime_pipeline_persists_audio_and_text(tmp_path) -> None:
     db.close()
 
 
+def test_abort_skips_the_text_pipeline_and_marks_the_session_cancelled(tmp_path) -> None:
+    db = Database(tmp_path / "db.sqlite3")
+    updates = []
+    job = SimulatedRealtimeJob(
+        db,
+        MockAsrProvider(),
+        AppConfig(data_dir=str(tmp_path), llm_model="qwen-plus"),
+        updates.append,
+        stop_timeout=1,
+        text_provider=SimulatedTextProvider(),
+    )
+
+    job.abort()
+    job.run()
+
+    assert db.get_session(job.session_id)["status"] == SessionStatus.CANCELLED
+    assert any(update.kind == "cancelled" for update in updates)
+    assert not any(update.kind == "pipeline" for update in updates)
+    db.close()
+
+
 def test_pause_keeps_job_open_and_resume_starts_a_new_cloud_stream(tmp_path) -> None:
     db = Database(tmp_path / "db.sqlite3")
     provider = CountingStreamProvider()

@@ -33,6 +33,7 @@ from asr_client.models import (
     AudioTrack,
     DEFAULT_POLISH_PROMPT,
 )
+from asr_client.ui.mini_window import MiniShortcutEdit
 from asr_client.ui.widgets import (
     ActivityHeatmap,
     AnimatedListWidget,
@@ -1393,9 +1394,9 @@ class SettingsPage(Page):
         shortcut_layout = QVBoxLayout(shortcuts)
         shortcut_layout.setContentsMargins(20, 18, 20, 18)
         shortcut_layout.setSpacing(11)
-        shortcut_layout.addWidget(_label("实时录音快捷键", "cardTitle"))
+        shortcut_layout.addWidget(_label("快捷键", "cardTitle"))
         shortcut_layout.addWidget(
-            _label("仅在实时录音页生效；编辑文稿时会自动避让", "cardCaption")
+            _label("主界面快捷键仅在实时录音页生效；编辑文稿时自动避让", "cardCaption")
         )
         self.toggle_shortcut = QKeySequenceEdit(
             QKeySequence(config.realtime_toggle_shortcut)
@@ -1436,6 +1437,17 @@ class SettingsPage(Page):
             1,
         )
         shortcut_layout.addLayout(shortcut_row)
+        shortcut_layout.addSpacing(5)
+        self.mini_shortcut = MiniShortcutEdit(config.mini_mode_shortcut)
+        shortcut_layout.addWidget(
+            _settings_field("Mini · 开始 / 停止", self.mini_shortcut)
+        )
+        shortcut_layout.addWidget(
+            _label(
+                "点击后直接按下新快捷键；Mini 显示时可在任意应用中触发",
+                "cardCaption",
+            )
+        )
         columns.addWidget(shortcuts)
         content_layout.addLayout(columns)
         content_layout.addStretch(1)
@@ -1484,6 +1496,7 @@ class SettingsPage(Page):
             self.toggle_shortcut_enabled.toggled,
             self.stop_shortcut.keySequenceChanged,
             self.stop_shortcut_enabled.toggled,
+            self.mini_shortcut.shortcutChanged,
         ):
             signal.connect(self._queue_auto_save)
         self.data_dir.editingFinished.connect(self._queue_auto_save)
@@ -1522,6 +1535,7 @@ class SettingsPage(Page):
                 QKeySequence.SequenceFormat.PortableText
             ),
             realtime_stop_shortcut_enabled=self.stop_shortcut_enabled.isChecked(),
+            mini_mode_shortcut=self.mini_shortcut.shortcut(),
             remember_key=self.remember.isChecked(),
         )
 
@@ -1577,6 +1591,7 @@ class SettingsPage(Page):
             self.stop_shortcut_enabled.setChecked(
                 config.realtime_stop_shortcut_enabled
             )
+            self.mini_shortcut.set_shortcut(config.mini_mode_shortcut)
         finally:
             self._auto_save_suspended = False
 

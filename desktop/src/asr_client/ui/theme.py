@@ -71,6 +71,14 @@ QWidget#sidebar {
     border: 0;
 }
 
+QPushButton#miniModeButton {
+    min-height: 44px;
+    max-height: 44px;
+    background: transparent;
+    border: 0;
+    padding: 0;
+}
+
 QLabel#brand {
     color: #fffdf7;
     font-family: "Bahnschrift", "Microsoft YaHei UI";
@@ -144,6 +152,46 @@ QFrame#privacyBadge {
 QLabel#privacyTitle { color: #d7dde2; font-weight: 600; }
 QLabel#sideNotice { color: #7f8993; font-size: 11px; }
 QLabel#privacyDot { color: #45c8a9; font-size: 18px; }
+
+QFrame#miniShell {
+    background: #171b20;
+    border: 1px solid #343d45;
+    border-radius: 16px;
+}
+QLabel#miniStatus {
+    color: #eef1f2;
+    background: transparent;
+    font-family: "Bahnschrift SemiBold", "Microsoft YaHei UI";
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    min-height: 38px;
+}
+QLabel#miniStatus[tone="idle"] { color: #b7c0c7; }
+QLabel#miniStatus[tone="warning"] { color: #e3b95f; }
+QLabel#miniStatus[tone="processing"] { color: #f1d7cf; }
+QLabel#miniStatus[tone="success"] { color: #72d7b9; }
+QLabel#miniStatus[tone="danger"] { color: #f08b7e; }
+QPushButton#miniHomeButton {
+    min-width: 38px;
+    max-width: 38px;
+    min-height: 38px;
+    max-height: 38px;
+    color: #aeb7bf;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 0;
+    font-family: "Bahnschrift SemiBold";
+    font-size: 16px;
+    font-weight: 700;
+}
+QPushButton#miniHomeButton:hover {
+    color: #fffdf8;
+    background: #262e35;
+    border-color: #3a444d;
+}
+QPushButton#miniHomeButton:pressed { background: #303941; padding: 1px 0 4px 0; }
 
 QLabel#eyebrow {
     color: #d94e30;
@@ -466,6 +514,23 @@ QLineEdit, QComboBox, QSpinBox, QKeySequenceEdit {
     border-radius: 8px;
     padding: 7px 10px;
     selection-background-color: #f05b3a;
+}
+QPushButton#miniShortcutEdit {
+    min-height: 24px;
+    color: #252c32;
+    background: #f9f8f3;
+    border: 1px solid #d7d4cc;
+    border-radius: 8px;
+    padding: 7px 10px;
+    text-align: left;
+    font-weight: 500;
+}
+QPushButton#miniShortcutEdit:hover { background: #fffefa; border-color: #b9b4aa; }
+QPushButton#miniShortcutEdit:focus { background: #fffefa; border-color: #f05b3a; }
+QPushButton#miniShortcutEdit[capturing="true"] {
+    color: #a53e28;
+    background: #fff0e9;
+    border-color: #f05b3a;
 }
 QLineEdit:hover, QComboBox:hover, QSpinBox:hover,
 QKeySequenceEdit:hover { border-color: #b9b4aa; }

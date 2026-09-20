@@ -137,28 +137,13 @@ class SidebarMiniButton(QPushButton):
             QPointF(card.right() - 14, card.top() + 1.2),
         )
 
-        icon_color = self._blend("#9eabb5", "#ff7657", progress)
-        icon = QRectF(
-            10.5 + progress * 1.5,
-            card.center().y() - 7.5,
-            20,
-            15,
-        )
-        painter.setPen(QPen(icon_color, 1.45))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(icon, 5, 5)
-        painter.drawLine(
-            QPointF(icon.left() + 6, icon.center().y()),
-            QPointF(icon.right() - 6, icon.center().y()),
-        )
-
-        text_left = 38.0 + progress
+        text_left = 12.0 + progress
         text_width = max(1.0, self.width() - text_left - 14.0)
         primary_font = self.font()
-        primary_font.setPixelSize(15)
-        primary_font.setBold(True)
+        primary_font.setPixelSize(13)
+        primary_font.setBold(False)
         painter.setFont(primary_font)
-        painter.setPen(self._blend("#f0f3f4", "#fffdf8", progress))
+        painter.setPen(self._blend("#9ea7b0", "#fffdf7", progress))
         painter.drawText(
             QRectF(
                 text_left,

@@ -73,10 +73,22 @@ def test_mini_window_uses_single_line_stage_labels_and_local_keys() -> None:
         "clarity": "文本清洗",
         "polish": "定向修复",
         "completed": "完成",
+        "copied": "已复制到剪贴板",
     }
     for state, label in expected.items():
         window.set_status(state)
         assert window.status_label.text() == label
+
+    window.set_status("recording")
+    window.set_audio_level(0.8)
+    window.shell._tick()
+    assert window.shell.is_recording
+    assert window.shell._timer.isActive()
+    assert window.shell.display_level > 0
+    window.set_status("paused")
+    assert not window.shell.is_recording
+    assert not window.shell._timer.isActive()
+    assert window.shell.display_level == 0
 
     window.keyPressEvent(
         QKeyEvent(
@@ -263,7 +275,8 @@ def test_completed_mini_round_copies_final_text_automatically(
 
     assert QApplication.clipboard().text() == "自动复制文本"
     assert window._mini_round_complete
-    assert window.mini_window.status == "completed"
+    assert window.mini_window.status == "copied"
+    assert window.mini_window.status_label.text() == "已复制到剪贴板"
 
     window._mini_mode = False
     window.close()

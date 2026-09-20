@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import math
 import sys
 import threading
 from ctypes import wintypes
@@ -12,17 +13,23 @@ from PySide6.QtCore import (
     QPointF,
     QRectF,
     Qt,
+    QTimer,
     Signal,
 )
 from PySide6.QtGui import (
+    QBrush,
     QColor,
     QCloseEvent,
     QCursor,
     QFocusEvent,
+    QHideEvent,
     QKeyEvent,
+    QLinearGradient,
     QMouseEvent,
     QPainter,
+    QPainterPath,
     QPen,
+    QShowEvent,
 )
 from PySide6.QtWidgets import (
     QFrame,
@@ -212,6 +219,146 @@ class MiniHomeButton(QPushButton):
         painter.drawLine(QPointF(19.0, 12.8), QPointF(25.5, 18.5))
         painter.drawRoundedRect(QRectF(14.0, 17.5, 10.0, 8.0), 1.8, 1.8)
         painter.drawLine(QPointF(18.9, 21.0), QPointF(18.9, 25.2))
+
+
+class MiniWaveShell(QFrame):
+    """Audio-reactive translucent spectrum flowing behind Mini content."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setObjectName("miniShell")
+        self._recording = False
+        self._level = 0.0
+        self._display_level = 0.0
+        self._phase = 0.0
+        self._timer = QTimer(self)
+        self._timer.setInterval(33)
+        self._timer.timeout.connect(self._tick)
+
+    @property
+    def is_recording(self) -> bool:
+        return self._recording
+
+    @property
+    def display_level(self) -> float:
+        return self._display_level
+
+    def set_recording(self, recording: bool) -> None:
+        self._recording = bool(recording)
+        if self._recording and self.isVisible():
+            self._timer.start()
+        else:
+            self._timer.stop()
+        if not self._recording:
+            self._level = 0.0
+            self._display_level = 0.0
+        self.update()
+
+    def set_level(self, level: float) -> None:
+        self._level = max(0.0, min(1.0, float(level)))
+
+    def _tick(self) -> None:
+        smoothing = 0.32 if self._level >= self._display_level else 0.16
+        self._display_level += (self._level - self._display_level) * smoothing
+        self._phase = (
+            self._phase + 0.075 + self._display_level * 0.12
+        ) % (math.pi * 2)
+        self.update()
+
+    @staticmethod
+    def _wave_path(
+        rect: QRectF,
+        phase: float,
+        amplitude: float,
+        frequency: float,
+        offset: float = 0.0,
+    ) -> QPainterPath:
+        path = QPainterPath()
+        left = rect.left()
+        width = max(1.0, rect.width())
+        center_y = rect.center().y() + offset
+        for index, x in enumerate(range(int(rect.left()), int(rect.right()) + 2, 2)):
+            normalized = max(0.0, min(1.0, (x - left) / width))
+            envelope = math.sin(normalized * math.pi) ** 0.72
+            y = center_y + math.sin(normalized * frequency + phase) * amplitude * envelope
+            if index == 0:
+                path.moveTo(float(x), y)
+            else:
+                path.lineTo(float(x), y)
+        return path
+
+    def paintEvent(self, event: object) -> None:  # noqa: N802 - Qt API
+        super().paintEvent(event)
+        if not self._recording:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        clip_rect = QRectF(self.rect()).adjusted(1.5, 1.5, -1.5, -1.5)
+        clip = QPainterPath()
+        clip.addRoundedRect(clip_rect, 15, 15)
+        painter.setClipPath(clip)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Screen)
+
+        energy = max(0.045, self._display_level)
+        amplitude = 1.4 + energy * 10.5
+        wave_rect = clip_rect.adjusted(7, 7, -7, -7)
+
+        fill_gradient = QLinearGradient(wave_rect.left(), 0, wave_rect.right(), 0)
+        fill_gradient.setColorAt(0.0, QColor(64, 222, 235, round(10 + energy * 20)))
+        fill_gradient.setColorAt(0.5, QColor(143, 105, 255, round(14 + energy * 27)))
+        fill_gradient.setColorAt(1.0, QColor(255, 101, 66, round(12 + energy * 24)))
+        primary = self._wave_path(
+            wave_rect, self._phase, amplitude, math.pi * 5.2
+        )
+        fill = QPainterPath(primary)
+        fill.lineTo(wave_rect.right(), wave_rect.bottom())
+        fill.lineTo(wave_rect.left(), wave_rect.bottom())
+        fill.closeSubpath()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(fill_gradient))
+        painter.drawPath(fill)
+
+        line_gradient = QLinearGradient(wave_rect.left(), 0, wave_rect.right(), 0)
+        line_gradient.setColorAt(0.0, QColor(78, 235, 239, round(75 + energy * 95)))
+        line_gradient.setColorAt(0.48, QColor(158, 118, 255, round(85 + energy * 105)))
+        line_gradient.setColorAt(1.0, QColor(255, 117, 83, round(80 + energy * 100)))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(
+            QPen(
+                QBrush(line_gradient),
+                1.35 + energy * 1.1,
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+                Qt.PenJoinStyle.RoundJoin,
+            )
+        )
+        painter.drawPath(primary)
+
+        secondary = self._wave_path(
+            wave_rect,
+            -self._phase * 0.72 + 1.1,
+            amplitude * 0.58,
+            math.pi * 6.4,
+            offset=1.5,
+        )
+        secondary_gradient = QLinearGradient(
+            wave_rect.left(), 0, wave_rect.right(), 0
+        )
+        secondary_gradient.setColorAt(0.0, QColor(63, 211, 255, 38))
+        secondary_gradient.setColorAt(0.55, QColor(224, 103, 255, 58))
+        secondary_gradient.setColorAt(1.0, QColor(255, 165, 72, 42))
+        painter.setPen(QPen(QBrush(secondary_gradient), 1.0))
+        painter.drawPath(secondary)
+
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 - Qt API
+        if self._recording:
+            self._timer.start()
+        super().showEvent(event)
+
+    def hideEvent(self, event: QHideEvent) -> None:  # noqa: N802 - Qt API
+        self._timer.stop()
+        super().hideEvent(event)
 
 
 class MiniShortcutEdit(QPushButton):
@@ -537,6 +684,7 @@ class MiniWindow(QWidget):
         "polish": ("定向修复", True, "processing"),
         "resetting": ("正在重置", True, "warning"),
         "completed": ("完成", False, "success"),
+        "copied": ("已复制到剪贴板", False, "success"),
         "failed": ("流程未完成", False, "danger"),
     }
 
@@ -561,9 +709,8 @@ class MiniWindow(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(6, 6, 6, 6)
         outer.setSpacing(0)
-        shell = QFrame()
-        shell.setObjectName("miniShell")
-        row = QHBoxLayout(shell)
+        self.shell = MiniWaveShell()
+        row = QHBoxLayout(self.shell)
         row.setContentsMargins(13, 6, 8, 6)
         row.setSpacing(8)
 
@@ -581,13 +728,13 @@ class MiniWindow(QWidget):
         self.home_button = MiniHomeButton()
         row.addWidget(self.home_button)
         row.setAlignment(self.home_button, Qt.AlignmentFlag.AlignVCenter)
-        outer.addWidget(shell)
+        outer.addWidget(self.shell)
 
-        shadow = QGraphicsDropShadowEffect(shell)
+        shadow = QGraphicsDropShadowEffect(self.shell)
         shadow.setBlurRadius(22)
         shadow.setOffset(0, 3)
         shadow.setColor(QColor(0, 0, 0, 105))
-        shell.setGraphicsEffect(shadow)
+        self.shell.setGraphicsEffect(shadow)
 
         self.home_button.clicked.connect(self.home_requested.emit)
         self.set_status("ready")
@@ -616,8 +763,12 @@ class MiniWindow(QWidget):
         self.status_label.style().unpolish(self.status_label)
         self.status_label.style().polish(self.status_label)
         self.indicator.set_active(active)
+        self.shell.set_recording(status == "recording")
         if changed and self.isVisible():
             animate_reveal(self.status_label, 130, 0.38)
+
+    def set_audio_level(self, level: float) -> None:
+        self.shell.set_level(level)
 
     def show_for_mode(self) -> None:
         if not self._positioned:

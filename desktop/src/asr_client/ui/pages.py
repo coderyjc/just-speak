@@ -217,10 +217,11 @@ class HomePage(Page):
         self.token_badge = _label("", "dashboardTokenBadge")
         self.token_badge.setToolTip("仅在云端响应返回 usage 时累计")
         heatmap_header.addWidget(self.token_badge)
-        self.heatmap_range = _label("过去 12 个月", "dashboardRange")
+        self.heatmap_range = _label("过去 30 天", "dashboardRange")
         heatmap_header.addWidget(self.heatmap_range)
         heatmap_layout.addLayout(heatmap_header)
         self.heatmap = ActivityHeatmap()
+        self.heatmap.set_range_days(30)
         heatmap_layout.addWidget(self.heatmap)
         heatmap_footer = QHBoxLayout()
         heatmap_footer.setContentsMargins(0, 0, 0, 0)
@@ -245,10 +246,10 @@ class HomePage(Page):
                 heatmap_footer.addWidget(_label("|", "heatmapRangeDivider"))
         heatmap_footer.addStretch(1)
         heatmap_layout.addLayout(heatmap_footer)
-        self._heatmap_period = "year"
+        self._heatmap_period = "month"
         self._heatmap_daily: dict[str, int] = {}
         self._heatmap_as_of = ""
-        self.heatmap_period_buttons["year"].setChecked(True)
+        self.heatmap_period_buttons["month"].setChecked(True)
         content_layout.addWidget(heatmap_card)
 
         stats_card = Card("dashboardStats", shadow=False)

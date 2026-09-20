@@ -10,12 +10,14 @@ from PySide6.QtWidgets import QApplication
 
 from asr_client.storage.config import ApiKeyStore, ConfigStore, app_config_dir
 from asr_client.storage.database import Database
+from asr_client.single_instance import SingleInstanceGuard
 from asr_client.ui.main_window import MainWindow
 from asr_client.ui.system_tray import SystemTrayController
 from asr_client.ui.theme import APP_STYLESHEET
 
 
 STYLE = APP_STYLESHEET
+SINGLE_INSTANCE_NAME = "JustSpeak.Desktop.SingleInstance.v1"
 
 
 def _open_database(config_store: ConfigStore) -> tuple[Database, str]:
@@ -55,6 +57,9 @@ def main() -> int:
     app.setWindowIcon(icon)
     app.setStyle("Fusion")
     app.setStyleSheet(STYLE)
+    instance_guard = SingleInstanceGuard(SINGLE_INSTANCE_NAME, app)
+    if not instance_guard.acquire():
+        return 0
     config_store = ConfigStore()
     database, warning = _open_database(config_store)
     log_dir = app_config_dir() / "logs"
@@ -75,6 +80,8 @@ def main() -> int:
         tray.quit_requested.connect(window.quit_application)
         tray.show()
     app.aboutToQuit.connect(window.shutdown)
+    app.aboutToQuit.connect(instance_guard.close)
+    instance_guard.activation_requested.connect(window.show_main_window)
     window.show()
     try:
         return app.exec()

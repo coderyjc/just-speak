@@ -50,15 +50,9 @@ def test_home_page_displays_all_usage_metrics() -> None:
     assert page.metrics["recent"].value.text() == "6 条"
     assert page.token_badge.text() == "98,765 Token"
     assert not page.token_badge.isHidden()
-    assert page.heatmap_range.text() == "12 个月 · 至 09.11"
-    assert page.heatmap.range_days == 365
-    assert page.heatmap_period_buttons["year"].isChecked()
-
-    page.heatmap_period_buttons["month"].click()
+    assert page.heatmap_range.text() == "30 天 · 至 09.11"
     assert page.heatmap.range_days == 30
     assert page.heatmap_period_buttons["month"].isChecked()
-    assert page.heatmap_range.text() == "30 天 · 至 09.11"
-    assert page.heatmap.graphicsEffect() is not None
 
     page.resize(664, 455)
     page.show()
@@ -69,7 +63,13 @@ def test_home_page_displays_all_usage_metrics() -> None:
 
     page.heatmap_period_buttons["year"].click()
     assert page.heatmap.range_days == 365
+    assert page.heatmap_period_buttons["year"].isChecked()
     assert page.heatmap_range.text() == "12 个月 · 至 09.11"
+    assert page.heatmap.graphicsEffect() is not None
+
+    page.heatmap_period_buttons["month"].click()
+    assert page.heatmap.range_days == 30
+    assert page.heatmap_range.text() == "30 天 · 至 09.11"
     assert page.page_status.text() == "已统计 24 条有效文稿"
     page.set_statistics({})
     assert page.token_badge.isHidden()

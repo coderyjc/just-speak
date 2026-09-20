@@ -793,7 +793,9 @@ class MainWindow(QMainWindow):
     def on_job_update(self, source: str, update: JobUpdate) -> None:
         if update.kind == "meter":
             self.realtime_page.duration.setText(self._format_duration(update.message))
-            self.realtime_page.set_level(float(update.payload or 0))
+            level = float(update.payload or 0)
+            self.realtime_page.set_level(level)
+            self.mini_window.set_audio_level(level)
             return
         if update.kind == "recording_state" and source == "realtime":
             state = str(update.payload or "recording")
@@ -872,11 +874,13 @@ class MainWindow(QMainWindow):
                     )
                     self._mini_round_complete = update.kind == "completed"
                     if update.kind == "completed":
-                        self.mini_window.set_status("completed")
                         if self._mini_mode:
                             QApplication.clipboard().setText(
                                 self.realtime_page.final_text()
                             )
+                            self.mini_window.set_status("copied")
+                        else:
+                            self.mini_window.set_status("completed")
                     else:
                         self.mini_window.set_status("failed")
                 if self._connection_test and not reset_after_abort:
